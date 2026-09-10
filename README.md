@@ -4,14 +4,17 @@
 
 ## 本地开发
 
-需要 Node.js 26.8.2、pnpm 12.3.4 和 Docker Compose；直接运行后端时使用 Go 1.27.1。版本以 `.node-version`、`package.json` 和 `services/backend/go.mod` 为准。Vue 类型检查使用 TypeScript 6.0.3 的 JavaScript 编译器接口。
+需要 Docker Compose，并安装、激活 [mise](https://mise.jdx.dev/getting-started.html)。`mise.toml` 固定 Node.js、pnpm、Go 和 sqlc 版本；升级时同步 `.node-version`、`package.json` 和 `services/backend/go.mod`。
 
 ```bash
-npm install --global pnpm@12.3.4
+mise trust
+mise install
 pnpm install --frozen-lockfile
 node scripts/setup-local.mjs
 docker compose up --build
 ```
+
+个人覆盖使用 `mise.local.toml`，应用环境变量使用各服务的 `.env`；这些本地配置已加入 `.gitignore`。环境模板、依赖锁文件和 sqlc 生成代码随仓库提交。
 
 另开终端运行 `pnpm dev`：
 
@@ -54,7 +57,7 @@ go vet ./...
 # 使用独立测试数据库，不要连接生产库。
 TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/minoduck_test?sslmode=disable' go test -race -count=1 ./...
 go build ./cmd/...
-# 修改 schema 或 queries 后，使用 sqlc 1.31.1：
+# 修改 schema 或 queries 后重新生成数据库代码：
 sqlc generate
 ```
 

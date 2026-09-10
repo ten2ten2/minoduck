@@ -1,15 +1,64 @@
+# 依赖与工具缓存
 node_modules/
+.pnpm-store/
+.npm/
+.cache/
+.vite/
+*.tsbuildinfo
+
+# Nuxt、Nitro 与 Cloudflare 构建产物
 .nuxt/
+.nitro/
 .output/
+dist/
+.data/
 .wrangler/
 .sites-runtime/
+
+# 本地环境与 mise 覆盖；保留配置模板
 .env
 .env.*
 !.env.example
+!.env.*.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+mise.local.toml
+mise.*.local.toml
+.direnv/
+
+# 测试、覆盖率与性能分析产物
 coverage/
+coverage.out
 test-results/
 playwright-report/
-services/backend/bin/
+blob-report/
+*.test
+*.prof
+
+# Go 可执行文件；保留 cmd 源码目录与 sqlc 生成代码
+/services/backend/bin/
+/services/backend/api
+/services/backend/worker
+/services/backend/scheduler
+/services/backend/migrate
+*.exe
+
+# 日志、临时文件与本地对象存储
 *.log
-.DS_Store
 tmp/
+temp/
+
+# 编辑器与系统文件；允许共享 VS Code 项目配置
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
