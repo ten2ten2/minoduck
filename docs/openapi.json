@@ -1,0 +1,2895 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MinoDuck MVP API",
+    "version": "0.1.0",
+    "description": "Internal API behind same-origin BFF. UTC-exclusive end windows, exact decimal strings, no cross-currency sums. Endpoint-specific evidence objects are intentionally extensible."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    },
+    {
+      "url": "https://api.minoduck.ai"
+    }
+  ],
+  "security": [
+    {
+      "Session": [],
+      "BFFService": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "summary": "Health",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "ready",
+        "summary": "Ready",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/webhooks/stripe": {
+      "post": {
+        "operationId": "stripeWebhook",
+        "summary": "Stripe webhook",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "Stripe-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/email/start": {
+      "post": {
+        "operationId": "emailStart",
+        "summary": "Email start",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "security": [
+          {
+            "BFFService": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/email/verify": {
+      "post": {
+        "operationId": "emailVerify",
+        "summary": "Email verify",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BFFService": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailVerify"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/google/start": {
+      "get": {
+        "operationId": "googleStart",
+        "summary": "Google start",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Redirect to fixed OAuth or application destination."
+          }
+        },
+        "security": [
+          {
+            "BFFService": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/google/callback": {
+      "get": {
+        "operationId": "googleCallback",
+        "summary": "Google callback",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Redirect to fixed OAuth or application destination."
+          }
+        },
+        "security": [
+          {
+            "BFFService": []
+          }
+        ]
+      }
+    },
+    "/api/v1/providers": {
+      "get": {
+        "operationId": "providers",
+        "summary": "Providers",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BFFService": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "me",
+        "summary": "Me",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/preferences": {
+      "patch": {
+        "operationId": "preferences",
+        "summary": "Preferences",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "Logout",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List workspaces",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkspace",
+        "summary": "Create workspace",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkspace"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/invitations/accept": {
+      "post": {
+        "operationId": "acceptInvitation",
+        "summary": "Accept invitation",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}": {
+      "get": {
+        "operationId": "workspace",
+        "summary": "Workspace",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateWorkspace",
+        "summary": "Update workspace",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/members": {
+      "get": {
+        "operationId": "members",
+        "summary": "Members",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/invitations": {
+      "post": {
+        "operationId": "invite",
+        "summary": "Invite",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/members/{memberId}": {
+      "delete": {
+        "operationId": "removeMember",
+        "summary": "Remove member",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "memberId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/deletion-requests": {
+      "post": {
+        "operationId": "deleteWorkspace",
+        "summary": "Delete workspace",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/connections": {
+      "get": {
+        "operationId": "connections",
+        "summary": "Connections",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createConnection",
+        "summary": "Create connection",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConnection"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/connections/{cid}": {
+      "get": {
+        "operationId": "connection",
+        "summary": "Connection",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "disconnect",
+        "summary": "Disconnect",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/connections/{cid}/sync": {
+      "post": {
+        "operationId": "syncConnection",
+        "summary": "Sync connection",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/connections/{cid}/credentials": {
+      "post": {
+        "operationId": "replaceCredential",
+        "summary": "Replace credential",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/sync-runs/{rid}": {
+      "get": {
+        "operationId": "syncRun",
+        "summary": "Sync run",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/imports": {
+      "post": {
+        "operationId": "upload",
+        "summary": "Upload",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "account_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "source_scope": {
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "type": "string"
+                  },
+                  "cost_kind": {
+                    "type": "string",
+                    "enum": ["actual", "billed", "calculated", "estimated"]
+                  },
+                  "granularity": {
+                    "type": "string",
+                    "enum": ["aggregate", "event"]
+                  }
+                },
+                "required": [
+                  "file",
+                  "account_id",
+                  "source_scope",
+                  "timezone",
+                  "cost_kind",
+                  "granularity"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/imports/{iid}/preview": {
+      "get": {
+        "operationId": "importPreview",
+        "summary": "Import preview",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/imports/{iid}/commit": {
+      "post": {
+        "operationId": "commitImport",
+        "summary": "Commit import",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitImport"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/overview": {
+      "get": {
+        "operationId": "overview",
+        "summary": "Overview",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "cost_kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["actual", "billed", "calculated", "estimated"]
+            }
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/costs": {
+      "get": {
+        "operationId": "costs",
+        "summary": "Costs",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostsPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "cost_kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["actual", "billed", "calculated", "estimated"]
+            }
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/costs/{eid}": {
+      "get": {
+        "operationId": "costDetail",
+        "summary": "Cost detail",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/invoices": {
+      "get": {
+        "operationId": "invoices",
+        "summary": "Invoices",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createInvoice",
+        "summary": "Create invoice",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Invoice"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/invoices/{iid}": {
+      "get": {
+        "operationId": "invoice",
+        "summary": "Invoice",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/reconciliation-runs": {
+      "get": {
+        "operationId": "reconciliations",
+        "summary": "Reconciliations",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "reconcile",
+        "summary": "Reconcile",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Reconcile"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/reconciliation-runs/{rid}": {
+      "get": {
+        "operationId": "reconciliation",
+        "summary": "Reconciliation",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/reconciliation-items/{rid}": {
+      "patch": {
+        "operationId": "handleReconciliation",
+        "summary": "Handle reconciliation",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Handling"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/insights": {
+      "get": {
+        "operationId": "insights",
+        "summary": "Insights",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/prices": {
+      "get": {
+        "operationId": "prices",
+        "summary": "Prices",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createPrice",
+        "summary": "Create price",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/price-comparisons": {
+      "post": {
+        "operationId": "comparePrices",
+        "summary": "Compare prices",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/usage-reconciliation-runs": {
+      "post": {
+        "operationId": "reconcileUsage",
+        "summary": "Reconcile usage",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageReconcile"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/insights/{iid}": {
+      "patch": {
+        "operationId": "updateInsight",
+        "summary": "Update insight",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "iid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/alert-rules": {
+      "get": {
+        "operationId": "alerts",
+        "summary": "Alerts",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createAlert",
+        "summary": "Create alert",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRule"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/alert-rules/{aid}": {
+      "patch": {
+        "operationId": "updateAlert",
+        "summary": "Update alert",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertRule"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAlert",
+        "summary": "Delete alert",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/exports": {
+      "post": {
+        "operationId": "createExport",
+        "summary": "Create export",
+        "responses": {
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "cost_kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["actual", "billed", "calculated", "estimated"]
+            }
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "get": {
+        "operationId": "exports",
+        "summary": "Exports",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/exports/{eid}": {
+      "get": {
+        "operationId": "exportStatus",
+        "summary": "Export status",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/exports/{eid}/download": {
+      "get": {
+        "operationId": "downloadExport",
+        "summary": "Download export",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/subscription": {
+      "get": {
+        "operationId": "subscription",
+        "summary": "Subscription",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/subscription/checkout": {
+      "post": {
+        "operationId": "checkout",
+        "summary": "Checkout",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionChoice"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/subscription/portal": {
+      "post": {
+        "operationId": "portal",
+        "summary": "Portal",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/workspaces/{wid}/subscription/change": {
+      "post": {
+        "operationId": "changeSubscription",
+        "summary": "Change subscription",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionChoice"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{wid}/subscription/cancel": {
+      "post": {
+        "operationId": "cancelSubscription",
+        "summary": "Cancel subscription",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "Session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-md_session",
+        "description": "Development uses md_session. Obtain via email or Google login."
+      },
+      "BFFService": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-MinoDuck-Service",
+        "description": "Server-only service identity. Browser calls same-origin /api/v1 through Nitro."
+      }
+    },
+    "schemas": {
+      "Amount": {
+        "type": "string",
+        "pattern": "^-?\\d{1,18}(\\.\\d{1,12})?$",
+        "description": "Original-currency decimal, never a floating point JSON number."
+      },
+      "APIError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message_key": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": ["code"]
+          }
+        },
+        "required": ["error"]
+      },
+      "SubscriptionChoice": {
+        "type": "object",
+        "properties": {
+          "plan": {
+            "type": "string",
+            "enum": ["starter", "team"]
+          },
+          "billing_interval": {
+            "type": "string",
+            "enum": ["month", "year"]
+          }
+        },
+        "required": ["plan", "billing_interval"]
+      },
+      "CreateWorkspace": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,47}$"
+          }
+        },
+        "required": ["name", "slug"]
+      },
+      "CreateConnection": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["openai", "anthropic", "openrouter", "csv"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "account_ref": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": ["provider", "name", "account_ref"]
+      },
+      "EmailStart": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "locale": {
+            "type": "string",
+            "enum": ["en", "zh-hans", "zh-hant"]
+          }
+        },
+        "required": ["email"]
+      },
+      "EmailVerify": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": ["token"]
+      },
+      "Preferences": {
+        "type": "object",
+        "properties": {
+          "locale": {
+            "type": "string",
+            "enum": ["en", "zh-hans", "zh-hant"]
+          },
+          "theme": {
+            "type": "string",
+            "enum": ["light", "dark", "system"]
+          }
+        }
+      },
+      "CommitImport": {
+        "type": "object",
+        "properties": {
+          "confirm_corrections": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Invoice": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "adjustment": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "source_scope": {
+            "type": "string"
+          },
+          "coverage_confirmed": {
+            "type": "boolean"
+          },
+          "evidence_note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "reference",
+          "currency",
+          "period_start",
+          "period_end",
+          "amount",
+          "source_scope",
+          "evidence_note"
+        ]
+      },
+      "Reconcile": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": ["invoice_id"]
+      },
+      "UsageReconcile": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "source_scope": {
+            "type": "string"
+          },
+          "coverage_confirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": ["account_id", "period_start", "period_end", "currency", "source_scope"]
+      },
+      "Handling": {
+        "type": "object",
+        "properties": {
+          "handling_status": {
+            "type": "string",
+            "enum": ["open", "explained", "ignored"]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": ["handling_status", "note"]
+      },
+      "AlertRule": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["budget", "spike", "sync_failure"]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "kind", "currency", "amount"]
+      },
+      "CostEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "cost_kind": {
+            "type": "string",
+            "enum": ["actual", "billed", "calculated", "estimated"]
+          },
+          "source_scope": {
+            "type": "string"
+          },
+          "source_batch_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "billing_provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "coverage": {
+            "type": "string",
+            "enum": ["complete", "partial", "unknown"]
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "dimensions": {
+            "type": "object"
+          }
+        }
+      },
+      "CostsPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEntry"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "page_size": {
+            "type": "integer"
+          },
+          "period": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

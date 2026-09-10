@@ -1,0 +1,19 @@
+{
+  "name": "minoduck",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "build": "pnpm --filter './apps/*' build",
+    "typecheck": "pnpm --filter './apps/*' typecheck",
+    "check:locales": "node scripts/check-locales.mjs",
+    "test": "node --test scripts/*.test.mjs",
+    "verify": "pnpm check:locales && pnpm test && pnpm typecheck && pnpm build"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}

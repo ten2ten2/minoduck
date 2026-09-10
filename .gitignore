@@ -1,0 +1,15 @@
+node_modules/
+.nuxt/
+.output/
+.wrangler/
+.sites-runtime/
+.env
+.env.*
+!.env.example
+coverage/
+test-results/
+playwright-report/
+services/backend/bin/
+*.log
+.DS_Store
+tmp/

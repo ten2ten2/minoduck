@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: minoduck
+      POSTGRES_USER: minoduck_migrator
+      POSTGRES_PASSWORD: local-migration-password
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/001-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minoduck_migrator -d minoduck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: ./services/backend
+    command: ["/app/migrate"]
+    environment:
+      MIGRATION_DATABASE_URL: postgres://minoduck_migrator:local-migration-password@postgres:5432/minoduck?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    build: ./services/backend
+    command: ["/app/api"]
+    env_file: ./services/backend/.env
+    environment:
+      DATABASE_URL: postgres://minoduck_app:local-only-password@postgres:5432/minoduck?sslmode=disable
+      STORAGE_DIR: /data/objects
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["objects:/data/objects"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  worker:
+    build: ./services/backend
+    command: ["/app/worker"]
+    env_file: ./services/backend/.env
+    environment:
+      DATABASE_URL: postgres://minoduck_app:local-only-password@postgres:5432/minoduck?sslmode=disable
+      STORAGE_DIR: /data/objects
+    volumes: ["objects:/data/objects"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+  scheduler:
+    build: ./services/backend
+    command: ["/app/scheduler"]
+    profiles: ["jobs"]
+    env_file: ./services/backend/.env
+    environment:
+      DATABASE_URL: postgres://minoduck_app:local-only-password@postgres:5432/minoduck?sslmode=disable
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+volumes:
+  postgres-data:
+  objects:

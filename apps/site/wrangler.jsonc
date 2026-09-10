@@ -1,0 +1,16 @@
+{
+  "name": "minoduck-site",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": ".output/public", "binding": "ASSETS", "run_worker_first": true },
+  "routes": [{ "pattern": "www.minoduck.ai", "custom_domain": true }],
+  "vars": {
+    "NUXT_PUBLIC_APP_URL": "https://app.minoduck.ai",
+    "NUXT_PUBLIC_SITE_URL": "https://www.minoduck.ai",
+  },
+  "observability": { "enabled": true },
+  "build": {
+    "command": "NUXT_PUBLIC_APP_URL=https://app.minoduck.ai NUXT_PUBLIC_SITE_URL=https://www.minoduck.ai pnpm build",
+  },
+}

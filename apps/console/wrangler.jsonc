@@ -1,0 +1,14 @@
+{
+  "name": "minoduck-console",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2026-09-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": ".output/public", "binding": "ASSETS", "run_worker_first": true },
+  "routes": [{ "pattern": "app.minoduck.ai", "custom_domain": true }],
+  "vars": {
+    "NUXT_API_ORIGIN": "https://api.minoduck.ai",
+    "NUXT_PUBLIC_SITE_URL": "https://www.minoduck.ai",
+  },
+  "observability": { "enabled": false },
+  "build": { "command": "pnpm build" },
+}
