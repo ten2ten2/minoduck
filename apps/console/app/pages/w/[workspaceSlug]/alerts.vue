@@ -2,8 +2,9 @@
 const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money } = useMoney()
-const { data, error, refresh } = await useAsyncData(`alerts-${workspace.value?.id}`, () =>
-  scoped<any[]>('/alert-rules'),
+const { data, error, refresh } = await useAsyncData(
+  () => `alerts-${workspace.value?.id}`,
+  (_app, { signal }) => scoped<any[]>('/alert-rules', { signal }),
 )
 const open = ref(false),
   busy = ref(false),

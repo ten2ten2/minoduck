@@ -2,7 +2,7 @@ databases:
   - name: minoduck-db
     databaseName: minoduck
     user: minoduck_migrator
-    postgresMajorVersion: "17"
+    postgresMajorVersion: '18'
     plan: basic-256mb
     region: oregon
     ipAllowList: []
@@ -83,7 +83,7 @@ services:
     runtime: docker
     plan: starter
     region: oregon
-    schedule: "*/5 * * * *"
+    schedule: '*/5 * * * *'
     dockerfilePath: ./services/backend/Dockerfile
     dockerContext: ./services/backend
     dockerCommand: /app/scheduler

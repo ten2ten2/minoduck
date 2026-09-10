@@ -2,8 +2,9 @@
 const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { date } = useMoney()
-const { data, error, refresh } = await useAsyncData(`exports-${workspace.value?.id}`, () =>
-  scoped<any[]>('/exports'),
+const { data, error, refresh } = await useAsyncData(
+  () => `exports-${workspace.value?.id}`,
+  (_app, { signal }) => scoped<any[]>('/exports', { signal }),
 )
 </script>
 <template>

@@ -3,8 +3,9 @@ const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
 const route = useRoute()
-const { data, error, refresh } = await useAsyncData(`billing-${workspace.value?.id}`, () =>
-  scoped('/subscription'),
+const { data, error, refresh } = await useAsyncData(
+  () => `billing-${workspace.value?.id}`,
+  (_app, { signal }) => scoped('/subscription', { signal }),
 )
 const busy = ref(false),
   actionError = ref(''),

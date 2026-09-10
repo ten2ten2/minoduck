@@ -27,6 +27,7 @@ export function useApi() {
       method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
       body?: any
       query?: Record<string, any>
+      signal?: AbortSignal
     } = {},
   ): Promise<T> {
     return (await $fetch<T>('/api/v1' + path, {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -33,7 +34,11 @@ func run() error {
 	workers := river.NewWorkers()
 	w := &jobs.Worker{DB: db, Config: c, Objects: platform.Objects{Config: c}}
 	river.AddWorker(workers, w)
-	q, e := river.NewClient(riverpgxv5.New(db), &river.Config{Queues: map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 4}}, Workers: workers})
+	q, e := river.NewClient(riverpgxv5.New(db), &river.Config{
+		Queues:          map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 4}},
+		Workers:         workers,
+		SoftStopTimeout: 20 * time.Second,
+	})
 	if e != nil {
 		return e
 	}
@@ -42,5 +47,14 @@ func run() error {
 		return e
 	}
 	<-ctx.Done()
-	return q.Stop(context.Background())
+	// River first drains active jobs, then cancels their contexts at the soft
+	// deadline. Bound the final wait as well, so a stuck job cannot block deploys.
+	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	select {
+	case <-q.Stopped():
+		return nil
+	case <-shutdown.Done():
+		return shutdown.Err()
+	}
 }

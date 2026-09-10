@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -234,7 +235,25 @@ func TestMVPIntegration(t *testing.T) {
 	request("PATCH", base+"/reconciliation-items/"+run["id"].(string), map[string]any{"handling_status": "explained", "note": "Synthetic rounding difference"}, 200)
 	exported := request("POST", base+"/exports"+params, nil, 202)
 	worker := jobs.Worker{DB: pool, Queue: q, Config: config, Objects: app.Objects}
-	if e = worker.Work(ctx, &river.Job[tasks.Args]{JobRow: &rivertype.JobRow{Attempt: 1, MaxAttempts: 3}, Args: tasks.Args{Task: "export", WorkspaceID: wid, ResourceID: exported["id"].(string)}}); e != nil {
+	// A shutdown on the final attempt must leave the export retryable. River
+	// refunds that attempt; a restarted worker must still be able to finish it.
+	interrupted, cancelJob := context.WithCancel(ctx)
+	cancelJob()
+	exportJob := &river.Job[tasks.Args]{JobRow: &rivertype.JobRow{Attempt: 3, MaxAttempts: 3}, Args: tasks.Args{Task: "export", WorkspaceID: wid, ResourceID: exported["id"].(string)}}
+	if e = worker.Work(interrupted, exportJob); !errors.Is(e, context.Canceled) {
+		t.Fatalf("interrupted worker: %v", e)
+	}
+	tx, e = platform.TenantTx(ctx, pool, wid)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var exportState string
+	e = tx.QueryRow(ctx, `SELECT state FROM exports WHERE workspace_id=$1 AND id=$2`, wid, exported["id"].(string)).Scan(&exportState)
+	tx.Rollback(ctx)
+	if e != nil || exportState != "pending" {
+		t.Fatalf("shutdown made export non-retryable: state=%q error=%v", exportState, e)
+	}
+	if e = worker.Work(ctx, exportJob); e != nil {
 		t.Fatal("export worker:", e)
 	}
 	request("GET", base+"/exports/"+exported["id"].(string)+"/download", nil, 200)

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Plug, ArrowUpRight } from 'lucide-vue-next'
+import { Plug, ArrowUpRight } from '@lucide/vue'
 const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
-const { data, error, status, refresh } = await useAsyncData(`overview-${workspace.value?.id}`, () =>
-  scoped('/overview'),
+const { data, error, status, refresh } = await useAsyncData(
+  () => `overview-${workspace.value?.id}`,
+  (_app, { signal }) => scoped('/overview', { signal }),
 )
 const currency = ref('USD')
 const currencies = computed<string[]>(() => data.value?.totals?.map((v: any) => v.currency) ?? [])

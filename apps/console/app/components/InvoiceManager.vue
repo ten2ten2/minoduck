@@ -4,11 +4,14 @@ const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
 const { data, error, refresh } = await useAsyncData(
-  `invoices-${workspace.value?.id}-${props.id ?? 'all'}`,
-  async () => ({
-    invoices: await scoped<any[]>('/invoices'),
-    accounts: await scoped<any[]>('/connections'),
-  }),
+  () => `invoices-${workspace.value?.id}-${props.id ?? 'all'}`,
+  async (_app, { signal }) => {
+    const [invoices, accounts] = await Promise.all([
+      scoped<any[]>('/invoices', { signal }),
+      scoped<any[]>('/connections', { signal }),
+    ])
+    return { invoices, accounts }
+  },
 )
 const selected = computed(() => data.value?.invoices.find((v) => v.id === props.id))
 const open = ref(false),

@@ -184,6 +184,9 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	returnURL := s.billingURL(c, tx)
 	form := url.Values{"mode": {"subscription"}, "customer": {*customer}, "line_items[0][price]": {price}, "line_items[0][quantity]": {"1"}, "success_url": {returnURL + "?checkout=success"}, "cancel_url": {returnURL + "?checkout=canceled"}, "subscription_data[metadata][billing_account_id]": {account}, "client_reference_id": {account}, "expires_at": {strconv.FormatInt((time.Now().Unix()/1800+2)*1800, 10)}}
+	// Explicitly select the current billing mode instead of relying on an API
+	// version's default. Existing subscriptions keep their original mode.
+	form.Set("subscription_data[billing_mode][type]", "flexible")
 	if e = client.Request(ctx, "POST", "checkout/sessions", key, form, &out); e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
@@ -260,9 +263,7 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		if live.Schedule != nil && *live.Schedule != schedule.ID {
 			return nil, APIError{"PLAN_CHANGE_ALREADY_SCHEDULED", 409}
 		}
-		form := url.Values{"end_behavior": {"release"}, "phases[0][start_date]": {strconv.FormatInt(item.Start, 10)}, "phases[0][end_date]": {strconv.FormatInt(item.End, 10)}, "phases[0][items][0][price]": {item.Price.ID}, "phases[0][items][0][quantity]": {"1"}, "phases[0][proration_behavior]": {"none"}, "phases[1][items][0][price]": {price}, "phases[1][items][0][quantity]": {"1"}, "phases[1][iterations]": {"1"}, "phases[1][proration_behavior]": {"none"}, "proration_behavior": {"none"}}
-		var out json.RawMessage
-		if e = client.Request(c.Request.Context(), "POST", "subscription_schedules/"+schedule.ID, key+"-phases", form, &out); e != nil {
+		if e = client.SetSchedulePhases(c.Request.Context(), schedule.ID, key+"-phases", item, price, in.Interval); e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
 		_, e = tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=$1,scheduled_interval=$2,provider_schedule_id=$3 WHERE billing_account_id=$4`, in.Plan, in.Interval, schedule.ID, c.GetString("billing_account_id"))

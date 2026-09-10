@@ -3,8 +3,9 @@ const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
 const route = useRoute()
-const { data, error } = await useAsyncData(`cost-${route.params.eid}`, () =>
-  scoped(`/costs/${route.params.eid}`),
+const { data, error } = await useAsyncData(
+  () => `cost-${workspace.value?.id}-${route.params.eid}`,
+  (_app, { signal }) => scoped(`/costs/${route.params.eid}`, { signal }),
 )
 </script>
 <template>

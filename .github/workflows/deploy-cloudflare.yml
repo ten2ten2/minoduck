@@ -15,10 +15,10 @@ jobs:
       NUXT_PUBLIC_SITE_URL: https://www.minoduck.ai
       NUXT_PUBLIC_CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '24' }
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with: { node-version-file: '.node-version' }
+      - uses: pnpm/action-setup@v6.1.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check:locales && pnpm test && pnpm typecheck
       - run: pnpm --filter @minoduck/site deploy

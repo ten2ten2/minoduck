@@ -19,8 +19,9 @@ const page = ref(Number(route.query.page ?? 1)),
   message = ref(''),
   actionError = ref(''),
   busy = ref(false)
-const { data, error, status, refresh } = await useAsyncData(`costs-${workspace.value?.id}`, () =>
-  scoped('/costs', { query: { ...filters, page: page.value } }),
+const { data, error, status, refresh } = await useAsyncData(
+  () => `costs-${workspace.value?.id}`,
+  (_app, { signal }) => scoped('/costs', { signal, query: { ...filters, page: page.value } }),
 )
 async function apply(nextPage = 1) {
   page.value = nextPage

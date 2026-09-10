@@ -17,10 +17,10 @@ AI 账单成本管理 MVP：把来源费用、用量和账单参考放在一起�
 
 ## 本地启动
 
-需要 Node.js 24、pnpm 11.19.0、Docker Compose。直接运行 Go 时使用 Go 1.26.1。
+需要 Node.js 26.8.2、pnpm 12.3.4、Docker Compose。直接运行 Go 时使用 Go 1.27.1。Node 版本由 `.node-version` 固定，CI 与本地一致。
 
 ```bash
-corepack enable
+npm install --global pnpm@12.3.4
 pnpm install --frozen-lockfile
 node scripts/setup-local.mjs
 # 启动 PostgreSQL、迁移、API、Worker
@@ -48,26 +48,26 @@ pnpm dev
 
 ## 套餐
 
-| 计划 | 月付 | 年付总额 | 连接 | 成员 / Workspace | 历史 | 月管理支出 |
-|---|---:|---:|---:|---:|---:|---:|
-| Free | $0 | — | 2 | 1 / 1 | 30 天 | $500 |
-| Starter | $29 | $290 | 5 | 3 / 1 | 180 天 | $5,000 |
-| Team | $79 | $790 | 15 | 10 / 3 | 730 天 | $25,000 |
-| Business | 人工联系 | 人工联系 | 人工约定 | 人工约定 | 人工约定 | 人工约定 |
+| 计划     |     月付 | 年付总额 |     连接 | 成员 / Workspace |     历史 | 月管理支出 |
+| -------- | -------: | -------: | -------: | ---------------: | -------: | ---------: |
+| Free     |       $0 |        — |        2 |            1 / 1 |    30 天 |       $500 |
+| Starter  |      $29 |     $290 |        5 |            3 / 1 |   180 天 |     $5,000 |
+| Team     |      $79 |     $790 |       15 |           10 / 3 |   730 天 |    $25,000 |
+| Business | 人工联系 | 人工联系 | 人工约定 |         人工约定 | 人工约定 |   人工约定 |
 
 额度属于用户拥有的 Billing Account，覆盖其多个 Workspace。支出上限为软限制，无自动超额扣费；非 USD 不自动折算。Business 无自助购买入口。
 
 ## 工程结构
 
-| 路径 | 用途 |
-|---|---|
-| `apps/site` | 官网 SSR/预渲染、三语言、SEO |
-| `apps/console` | 控制台 CSR、Nitro 同源 BFF |
-| `packages/ui`, `packages/locales` | 共享组件、样式、语言文案 |
-| `services/backend` | Gin API、River Worker、Cron、迁移、测试 |
-| `services/backend/queries` | sqlc 身份与租户查询；其余报表查询由 pgx 执行 |
-| `infra` | PostgreSQL 角色、Cloudflare 根域重定向 |
-| `docs/openapi.json` | HTTP 路由、鉴权和核心请求契约 |
+| 路径                              | 用途                                         |
+| --------------------------------- | -------------------------------------------- |
+| `apps/site`                       | 官网 SSR/预渲染、三语言、SEO                 |
+| `apps/console`                    | 控制台 CSR、Nitro 同源 BFF                   |
+| `packages/ui`, `packages/locales` | 共享组件、样式、语言文案                     |
+| `services/backend`                | Gin API、River Worker、Cron、迁移、测试      |
+| `services/backend/queries`        | sqlc 身份与租户查询；其余报表查询由 pgx 执行 |
+| `infra`                           | PostgreSQL 角色、Cloudflare 根域重定向       |
+| `docs/openapi.json`               | HTTP 路由、鉴权和核心请求契约                |
 
 ## 验证与部署
 
@@ -80,8 +80,8 @@ go test -race ./...
 # 集成测试需要可建表、建测试角色的独立测试数据库；不会使用生产库。
 TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/minoduck_test?sslmode=disable' go test -race -count=1 ./...
 go build ./cmd/...
-# 修改 queries 或 schema 后（sqlc v1.30.0）：
+# 修改 queries 或 schema 后（sqlc v1.31.1）：
 sqlc generate
 ```
 
-GitHub CI 运行 PostgreSQL 17 集成测试及两个 Nuxt 的类型检查/构建。没有 `TEST_DATABASE_URL` 时数据库测试明确跳过。部署入口为 [部署手册](docs/deployment.md)，设计取舍为 [架构决策](docs/architecture.md)，Provider 范围和 CSV 规范为 [数据契约](docs/data-contract.md)。
+GitHub CI 运行 PostgreSQL 18.6 集成测试及两个 Nuxt 的类型检查/构建。没有 `TEST_DATABASE_URL` 时数据库测试明确跳过。部署入口为 [部署手册](docs/deployment.md)，依赖版本、TypeScript 7 兼容限制和 API 调整见 [依赖升级记录](docs/dependency-upgrade.md)，设计取舍为 [架构决策](docs/architecture.md)，Provider 范围和 CSV 规范为 [数据契约](docs/data-contract.md)。

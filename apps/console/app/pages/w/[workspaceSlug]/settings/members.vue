@@ -1,8 +1,9 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
-const { data, error, refresh } = await useAsyncData(`members-${workspace.value?.id}`, () =>
-  scoped<any[]>('/members'),
+const { data, error, refresh } = await useAsyncData(
+  () => `members-${workspace.value?.id}`,
+  (_app, { signal }) => scoped<any[]>('/members', { signal }),
 )
 const open = ref(false),
   email = ref(''),

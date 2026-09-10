@@ -10,6 +10,27 @@
 4. API pre-deploy 执行 `/app/migrate`，同时应用应用表和 River 迁移。迁移完成后启动 Worker 和每五分钟运行的 scheduler。只把 API 绑定 `api.minoduck.ai`。
 5. `/healthz` 是进程状态；`/readyz` 包含数据库连通检查。生产启动会拒绝会绕过 RLS 的数据库角色。
 
+新实例使用 PostgreSQL 18，Compose 与 CI 固定 18.6。Render 为 18.x 托管小版本更新。已有 Render 17 实例需先完成备份、测试升级，再按 [Render 官方流程](https://render.com/docs/postgresql-upgrading) 升级；仅修改 Blueprint 不会迁移现有数据。
+
+River 从 0.23 升至 0.47 包含新的队列迁移（含 migration 7）；必须先停止旧 Worker，运行新版 `/app/migrate`，再启动新版 Worker。Worker 收到退出信号后最多等待 20 秒完成当前任务，随后取消任务上下文；应用等待退出最多 30 秒，Compose 留出 35 秒。被退出中断的任务保留重试状态，实际失败和超时仍遵循重试上限。
+
+### 本地已有 PostgreSQL 17 数据
+
+PostgreSQL 18 官方镜像将持久目录改为 `/var/lib/postgresql`。新版 Compose 使用独立的 `postgres18-data` 卷，保留原 `postgres-data` 卷；不会自动搬运数据。已有本地数据时按顺序操作：
+
+```bash
+# 更新代码前，停止写入并用旧版 PostgreSQL 17 导出。
+docker compose stop api worker scheduler
+docker compose exec -T postgres pg_dump -U minoduck_migrator -d minoduck -Fc > ../minoduck-pg17.dump
+docker compose stop postgres
+# 更新到新版代码后，只启动新的空 PostgreSQL 18 数据库。
+docker compose up -d --wait postgres
+docker compose exec -T postgres pg_restore --exit-on-error --no-owner --no-acl -U minoduck_migrator -d minoduck < ../minoduck-pg17.dump
+docker compose up --build
+```
+
+恢复只对新的空库执行一次；保留备份与旧卷，核对数据和权限后再自行清理。不要把旧版数据目录直接挂到 18 镜像，也不要在迁移前执行 `down -v`。目录变化见 [PostgreSQL 官方镜像说明](https://hub.docker.com/_/postgres)。
+
 已有表时授予运行角色权限；以下只展示授权，不包含生产密码：
 
 ```sql
@@ -34,14 +55,14 @@ ALTER DEFAULT PRIVILEGES FOR ROLE minoduck_migrator IN SCHEMA public
 
 先在 sandbox 配置并验证，live 与 test 的四个 Price ID 和 Webhook Secret 必须分别管理。新建两个 Product、四个 USD recurring Price：
 
-| 环境变量 | 单价（cents） | 周期 |
-|---|---:|---|
-| `STRIPE_PRICE_STARTER_MONTHLY` | 2900 | month |
-| `STRIPE_PRICE_STARTER_YEARLY` | 29000 | year |
-| `STRIPE_PRICE_TEAM_MONTHLY` | 7900 | month |
-| `STRIPE_PRICE_TEAM_YEARLY` | 79000 | year |
+| 环境变量                       | 单价（cents） | 周期  |
+| ------------------------------ | ------------: | ----- |
+| `STRIPE_PRICE_STARTER_MONTHLY` |          2900 | month |
+| `STRIPE_PRICE_STARTER_YEARLY`  |         29000 | year  |
+| `STRIPE_PRICE_TEAM_MONTHLY`    |          7900 | month |
+| `STRIPE_PRICE_TEAM_YEARLY`     |         79000 | year  |
 
-后端固定 Stripe API `2025-06-30.basil`。Webhook 端点 `https://api.minoduck.ai/api/v1/webhooks/stripe`，订阅事件：
+后端使用官方 `stripe-go/v86` 86.4.2，API 版本由 SDK 固定为 `2026-08-26.dahlia`。为新的 Webhook 端点选择同版本的 **snapshot events**；当前处理器使用事件内的对象 ID，然后重新读取 Stripe 订阅状态。端点 `https://api.minoduck.ai/api/v1/webhooks/stripe`，订阅事件：
 
 - `checkout.session.completed`
 - `customer.subscription.created`、`customer.subscription.updated`、`customer.subscription.deleted`
@@ -50,6 +71,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE minoduck_migrator IN SCHEMA public
 配置 `STRIPE_SECRET_KEY`、`STRIPE_WEBHOOK_SECRET`、四个 Price ID。创建独立 Customer Portal configuration，允许更新支付方式、账单记录，**禁用 Portal 订阅换档**；设置 `STRIPE_PORTAL_CONFIGURATION`。套餐变更走应用接口，以保持立即升级/期末降级策略一致。
 
 使用 Stripe CLI 转发测试 Webhook 时，目标是 Go 的 `localhost:8080/api/v1/webhooks/stripe`，使用该 CLI 会话产生的 signing secret。成功返回页不代表订阅已生效，页面可刷新核实服务端状态。
+
+如已有旧版本端点，先在 sandbox 验证新版 API 的 Checkout、升级、期末降级、取消、付款失败和事件回放，再切换端点版本。SDK 最多重试两次瞬时网络/API 故障，重用业务幂等键；每个请求含重试的总时限为 25 秒。验签保留正负五分钟窗口和密钥轮换支持。仓库测试使用合成 Stripe 响应，真实支付验收仍按 `acceptance.md` 执行。
 
 上线前按真实商户资格确定主体、税务、发票、退款规则和联系渠道；本仓库的 Terms/Privacy 是明确标注的发布前草案。退款通过经授权的 Stripe 后台流程进行，本版不提供自动退款 API。
 

@@ -5,8 +5,9 @@ const { money } = useMoney()
 const busy = ref(false),
   actionError = ref('')
 const codeError = (code: string) => errorText({ data: { error: { code } } })
-const { data, error, refresh } = await useAsyncData(`insights-${workspace.value?.id}`, () =>
-  scoped<any[]>('/insights'),
+const { data, error, refresh } = await useAsyncData(
+  () => `insights-${workspace.value?.id}`,
+  (_app, { signal }) => scoped<any[]>('/insights', { signal }),
 )
 async function update(id: string, state: string) {
   busy.value = true

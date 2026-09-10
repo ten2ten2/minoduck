@@ -4,8 +4,9 @@ const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
 const { data, error, refresh } = await useAsyncData(
-  `reconciliation-${workspace.value?.id}-${props.id ?? 'all'}`,
-  () => scoped(props.id ? `/reconciliation-runs/${props.id}` : '/reconciliation-runs'),
+  () => `reconciliation-${workspace.value?.id}-${props.id ?? 'all'}`,
+  (_app, { signal }) =>
+    scoped(props.id ? `/reconciliation-runs/${props.id}` : '/reconciliation-runs', { signal }),
 )
 const handling = ref('explained'),
   note = ref(''),

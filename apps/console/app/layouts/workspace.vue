@@ -12,7 +12,7 @@ import {
   Menu,
   LogOut,
   Plus,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 const { t, setLocale } = useI18n()
 const { user, workspaces, workspace, api, errorText } = useApi()
 const route = useRoute()
@@ -49,6 +49,7 @@ async function preferences(locale: string, theme: string) {
 async function signout() {
   try {
     await api('/auth/logout', { method: 'POST' })
+    clearNuxtData()
     user.value = null
     workspaces.value = []
     await navigateTo('/login')

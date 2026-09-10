@@ -27,7 +27,9 @@ type Worker struct {
 func (w *Worker) Timeout(*river.Job[tasks.Args]) time.Duration { return 12 * time.Minute }
 func (w *Worker) Work(ctx context.Context, job *river.Job[tasks.Args]) (err error) {
 	defer func() {
-		if err != nil && job.Attempt >= job.MaxAttempts {
+		// River 0.44+ refunds an interrupted attempt during shutdown. Preserve
+		// application state so the retried job can finish after the worker restarts.
+		if err != nil && !errors.Is(ctx.Err(), context.Canceled) && job.Attempt >= job.MaxAttempts {
 			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if job.Args.Task == "sync" {
@@ -112,6 +114,14 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	if _, e = w.DB.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID); e != nil {
 		return e
 	}
+	defer func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			// Match River's refunded attempt without reviving disconnected runs.
+			_, _ = w.DB.Exec(cleanup, `UPDATE sync_runs SET state='pending',attempts=greatest(attempts-1,0) WHERE workspace_id=$1 AND id=$2 AND state='running'`, a.WorkspaceID, a.ResourceID)
+		}
+	}()
 	for from := start; from.Before(end); from = from.AddDate(0, 0, 7) {
 		to := from.AddDate(0, 0, 7)
 		if to.After(end) {
@@ -230,6 +240,9 @@ func (w *Worker) publishShard(ctx context.Context, tx pgx.Tx, a tasks.Args, aid 
 	return e
 }
 func (w *Worker) syncFailure(ctx context.Context, job *river.Job[tasks.Args], aid string, generation int, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	var f connectors.Failure
 	if !errors.As(err, &f) {
 		f = connectors.Failure{Code: "PROVIDER_UNAVAILABLE"}
