@@ -1,5 +1,4 @@
 <script setup lang="ts">
-const props = defineProps<{ localizedRoutes?: boolean }>()
 const { locale, setLocale, t } = useI18n()
 const theme = useCookie<string>('md_theme', { default: () => 'system', sameSite: 'lax' })
 const language = useCookie<string>('md_locale', { default: () => 'en', sameSite: 'lax' })

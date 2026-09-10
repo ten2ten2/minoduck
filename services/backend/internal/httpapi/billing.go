@@ -6,17 +6,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
+	stripe "github.com/stripe/stripe-go/v86"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
 
-func (s *Server) stripe() subscriptions.Stripe {
-	return subscriptions.Stripe{Key: s.Config.StripeKey, HTTP: s.StripeHTTP}
+func (s *Server) stripe() *stripe.Client {
+	return subscriptions.NewStripe(s.Config.StripeKey, s.StripeHTTP)
 }
 func (s *Server) billingOwner(c *gin.Context, tx pgx.Tx) error {
 	var id string
@@ -148,10 +148,10 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	client := s.stripe()
 	if customer == nil {
-		var out struct {
-			ID string `json:"id"`
-		}
-		e = client.Request(ctx, "POST", "customers", "customer-"+account, url.Values{"email": {session(c).Email}, "metadata[billing_account_id]": {account}}, &out)
+		out, e := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{
+			Params: stripe.Params{IdempotencyKey: stripe.String("customer-" + account)},
+			Email:  stripe.String(session(c).Email), Metadata: map[string]string{"billing_account_id": account},
+		})
 		if e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
@@ -177,20 +177,22 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	// Stable across database rollback and retries within the same 30-minute window.
 	key = account + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(time.Now().Unix()/1800, 10)
-	var out struct {
-		ID      string `json:"id"`
-		URL     string `json:"url"`
-		Expires int64  `json:"expires_at"`
-	}
 	returnURL := s.billingURL(c, tx)
-	form := url.Values{"mode": {"subscription"}, "customer": {*customer}, "line_items[0][price]": {price}, "line_items[0][quantity]": {"1"}, "success_url": {returnURL + "?checkout=success"}, "cancel_url": {returnURL + "?checkout=canceled"}, "subscription_data[metadata][billing_account_id]": {account}, "client_reference_id": {account}, "expires_at": {strconv.FormatInt((time.Now().Unix()/1800+2)*1800, 10)}}
-	// Explicitly select the current billing mode instead of relying on an API
-	// version's default. Existing subscriptions keep their original mode.
-	form.Set("subscription_data[billing_mode][type]", "flexible")
-	if e = client.Request(ctx, "POST", "checkout/sessions", key, form, &out); e != nil {
+	out, e := client.V1CheckoutSessions.Create(ctx, &stripe.CheckoutSessionCreateParams{
+		Params: stripe.Params{IdempotencyKey: stripe.String(key)},
+		Mode:   stripe.String("subscription"), Customer: customer,
+		LineItems:  []*stripe.CheckoutSessionCreateLineItemParams{{Price: stripe.String(price), Quantity: stripe.Int64(1)}},
+		SuccessURL: stripe.String(returnURL + "?checkout=success"), CancelURL: stripe.String(returnURL + "?checkout=canceled"),
+		SubscriptionData: &stripe.CheckoutSessionCreateSubscriptionDataParams{
+			Metadata:    map[string]string{"billing_account_id": account},
+			BillingMode: &stripe.CheckoutSessionCreateSubscriptionDataBillingModeParams{Type: stripe.String("flexible")},
+		},
+		ClientReferenceID: stripe.String(account), ExpiresAt: stripe.Int64((time.Now().Unix()/1800 + 2) * 1800),
+	})
+	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
-	_, e = tx.Exec(ctx, `INSERT INTO checkout_requests(billing_account_id,request_key,plan_code,billing_interval,session_id,url,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(billing_account_id) DO UPDATE SET request_key=excluded.request_key,plan_code=excluded.plan_code,billing_interval=excluded.billing_interval,session_id=excluded.session_id,url=excluded.url,expires_at=excluded.expires_at`, account, key, in.Plan, in.Interval, out.ID, out.URL, time.Unix(out.Expires, 0))
+	_, e = tx.Exec(ctx, `INSERT INTO checkout_requests(billing_account_id,request_key,plan_code,billing_interval,session_id,url,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(billing_account_id) DO UPDATE SET request_key=excluded.request_key,plan_code=excluded.plan_code,billing_interval=excluded.billing_interval,session_id=excluded.session_id,url=excluded.url,expires_at=excluded.expires_at`, account, key, in.Plan, in.Interval, out.ID, out.URL, time.Unix(out.ExpiresAt, 0))
 	return gin.H{"url": out.URL}, e
 }
 func (s *Server) portal(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -208,10 +210,10 @@ func (s *Server) portal(c *gin.Context, tx pgx.Tx) (any, error) {
 	if s.Config.StripePortalConfig == "" {
 		return nil, APIError{"STRIPE_PORTAL_NOT_CONFIGURED", 503}
 	}
-	var out struct {
-		URL string `json:"url"`
-	}
-	e = s.stripe().Request(c.Request.Context(), "POST", "billing_portal/sessions", uuid.NewString(), url.Values{"customer": {*customer}, "return_url": {s.billingURL(c, tx)}, "configuration": {s.Config.StripePortalConfig}}, &out)
+	out, e := s.stripe().V1BillingPortalSessions.Create(c.Request.Context(), &stripe.BillingPortalSessionCreateParams{
+		Params:   stripe.Params{IdempotencyKey: stripe.String(uuid.NewString())},
+		Customer: customer, ReturnURL: stripe.String(s.billingURL(c, tx)), Configuration: stripe.String(s.Config.StripePortalConfig),
+	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
@@ -233,14 +235,15 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if sid == nil {
 		return nil, bad("NO_SUBSCRIPTION")
 	}
-	live, e := s.stripe().GetSubscription(c.Request.Context(), *sid)
+	client := s.stripe()
+	live, e := client.V1Subscriptions.Retrieve(c.Request.Context(), *sid, nil)
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
-	if live.Status != "active" || len(live.Items.Data) != 1 {
+	item := subscriptionItem(live)
+	if live.Status != stripe.SubscriptionStatusActive || item == nil {
 		return nil, bad("SUBSCRIPTION_NOT_ACTIVE")
 	}
-	item := live.Items.Data[0]
 	oldPlan, oldInterval := s.mapPrice(item.Price.ID)
 	if oldPlan == "" {
 		return nil, bad("UNRECOGNIZED_PRICE")
@@ -251,30 +254,32 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if live.Schedule != nil && !subscriptions.DeferredChange(oldPlan, in.Plan, oldInterval, in.Interval) {
 		return nil, APIError{"PLAN_CHANGE_ALREADY_SCHEDULED", 409}
 	}
-	client := s.stripe()
-	key := "change-" + *sid + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(item.Start, 10)
+	key := "change-" + *sid + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(item.CurrentPeriodStart, 10)
 	if subscriptions.DeferredChange(oldPlan, in.Plan, oldInterval, in.Interval) {
-		var schedule struct {
-			ID string `json:"id"`
-		}
-		if e = client.Request(c.Request.Context(), "POST", "subscription_schedules", key+"-create", url.Values{"from_subscription": {*sid}}, &schedule); e != nil {
+		schedule, e := client.V1SubscriptionSchedules.Create(c.Request.Context(), &stripe.SubscriptionScheduleCreateParams{
+			Params: stripe.Params{IdempotencyKey: stripe.String(key + "-create")}, FromSubscription: sid,
+		})
+		if e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
-		if live.Schedule != nil && *live.Schedule != schedule.ID {
+		if live.Schedule != nil && live.Schedule.ID != schedule.ID {
 			return nil, APIError{"PLAN_CHANGE_ALREADY_SCHEDULED", 409}
 		}
-		if e = client.SetSchedulePhases(c.Request.Context(), schedule.ID, key+"-phases", item, price, in.Interval); e != nil {
+		if _, e = client.V1SubscriptionSchedules.Update(c.Request.Context(), schedule.ID, scheduleParams(item, price, in.Interval, key+"-phases")); e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
 		_, e = tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=$1,scheduled_interval=$2,provider_schedule_id=$3 WHERE billing_account_id=$4`, in.Plan, in.Interval, schedule.ID, c.GetString("billing_account_id"))
-		return gin.H{"status": "scheduled", "effective_at": time.Unix(item.End, 0)}, e
+		return gin.H{"status": "scheduled", "effective_at": time.Unix(item.CurrentPeriodEnd, 0)}, e
 	}
-	form := url.Values{"items[0][id]": {item.ID}, "items[0][price]": {price}, "proration_behavior": {"always_invoice"}, "payment_behavior": {"pending_if_incomplete"}}
+	params := &stripe.SubscriptionUpdateParams{
+		Params:            stripe.Params{IdempotencyKey: stripe.String(key)},
+		Items:             []*stripe.SubscriptionUpdateItemParams{{ID: stripe.String(item.ID), Price: stripe.String(price)}},
+		ProrationBehavior: stripe.String("always_invoice"), PaymentBehavior: stripe.String("pending_if_incomplete"),
+	}
 	if oldInterval != in.Interval {
-		form.Set("billing_cycle_anchor", "now")
+		params.BillingCycleAnchorNow = stripe.Bool(true)
 	}
-	var out subscriptions.Subscription
-	if e = client.Request(c.Request.Context(), "POST", "subscriptions/"+*sid, key, form, &out); e != nil {
+	if _, e = client.V1Subscriptions.Update(c.Request.Context(), *sid, params); e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
 	return gin.H{"status": "awaiting_webhook"}, nil
@@ -291,17 +296,21 @@ func (s *Server) cancelSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if id == nil {
 		return nil, bad("NO_SUBSCRIPTION")
 	}
-	live, e := s.stripe().GetSubscription(c.Request.Context(), *id)
+	client := s.stripe()
+	live, e := client.V1Subscriptions.Retrieve(c.Request.Context(), *id, nil)
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
-	var out json.RawMessage
 	if live.Schedule != nil {
-		if e = s.stripe().Request(c.Request.Context(), "POST", "subscription_schedules/"+*live.Schedule+"/release", "release-"+*live.Schedule, nil, &out); e != nil {
+		if _, e = client.V1SubscriptionSchedules.Release(c.Request.Context(), live.Schedule.ID, &stripe.SubscriptionScheduleReleaseParams{
+			Params: stripe.Params{IdempotencyKey: stripe.String("release-" + live.Schedule.ID)},
+		}); e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
 	}
-	e = s.stripe().Request(c.Request.Context(), "POST", "subscriptions/"+*id, "cancel-"+*id, url.Values{"cancel_at_period_end": {"true"}}, &out)
+	_, e = client.V1Subscriptions.Update(c.Request.Context(), *id, &stripe.SubscriptionUpdateParams{
+		Params: stripe.Params{IdempotencyKey: stripe.String("cancel-" + *id)}, CancelAtPeriodEnd: stripe.Bool(true),
+	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
@@ -316,52 +325,91 @@ func (s *Server) mapPrice(id string) (string, string) {
 	}
 	return "", ""
 }
+
+func subscriptionItem(live *stripe.Subscription) *stripe.SubscriptionItem {
+	if live.Items == nil || len(live.Items.Data) != 1 {
+		return nil
+	}
+	item := live.Items.Data[0]
+	if item == nil || item.Price == nil || item.Price.Recurring == nil {
+		return nil
+	}
+	return item
+}
+
+func scheduleParams(current *stripe.SubscriptionItem, price, interval, key string) *stripe.SubscriptionScheduleUpdateParams {
+	return &stripe.SubscriptionScheduleUpdateParams{
+		Params:      stripe.Params{IdempotencyKey: stripe.String(key)},
+		EndBehavior: stripe.String("release"), ProrationBehavior: stripe.String("none"),
+		Phases: []*stripe.SubscriptionScheduleUpdatePhaseParams{
+			{
+				StartDate: stripe.Int64(current.CurrentPeriodStart), EndDate: stripe.Int64(current.CurrentPeriodEnd),
+				Items:             []*stripe.SubscriptionScheduleUpdatePhaseItemParams{{Price: stripe.String(current.Price.ID), Quantity: stripe.Int64(1)}},
+				ProrationBehavior: stripe.String("none"),
+			},
+			{
+				Duration:          &stripe.SubscriptionScheduleUpdatePhaseDurationParams{Interval: stripe.String(interval), IntervalCount: stripe.Int64(1)},
+				Items:             []*stripe.SubscriptionScheduleUpdatePhaseItemParams{{Price: stripe.String(price), Quantity: stripe.Int64(1)}},
+				ProrationBehavior: stripe.String("none"),
+			},
+		},
+	}
+}
+
+func stripeEventSubject(event stripe.Event) (customerID, subscriptionID string, err error) {
+	var customer *stripe.Customer
+	var subscription *stripe.Subscription
+	switch event.Type {
+	case stripe.EventTypeCheckoutSessionCompleted:
+		var session stripe.CheckoutSession
+		if err = json.Unmarshal(event.Data.Raw, &session); err != nil {
+			return
+		}
+		customer, subscription = session.Customer, session.Subscription
+	case stripe.EventTypeCustomerSubscriptionCreated, stripe.EventTypeCustomerSubscriptionUpdated, stripe.EventTypeCustomerSubscriptionDeleted:
+		var sub stripe.Subscription
+		if err = json.Unmarshal(event.Data.Raw, &sub); err != nil {
+			return
+		}
+		customer, subscription = sub.Customer, &sub
+	case stripe.EventTypeInvoicePaid, stripe.EventTypeInvoicePaymentFailed:
+		var invoice stripe.Invoice
+		if err = json.Unmarshal(event.Data.Raw, &invoice); err != nil {
+			return
+		}
+		customer = invoice.Customer
+		if invoice.Parent != nil && invoice.Parent.SubscriptionDetails != nil {
+			subscription = invoice.Parent.SubscriptionDetails.Subscription
+		}
+	}
+	if customer != nil {
+		customerID = customer.ID
+	}
+	if subscription != nil {
+		subscriptionID = subscription.ID
+	}
+	return
+}
+
 func (s *Server) stripeWebhook(c *gin.Context) {
 	body, e := io.ReadAll(io.LimitReader(c.Request.Body, 1024*1024+1))
 	if e != nil || len(body) > 1024*1024 {
 		s.fail(c, bad("INVALID_WEBHOOK"))
 		return
 	}
-	if e = subscriptions.VerifySignature(body, c.GetHeader("Stripe-Signature"), s.Config.StripeWebhookSecret, time.Now()); e != nil {
+	event, e := subscriptions.ParseStripeEvent(body, c.GetHeader("Stripe-Signature"), s.Config.StripeWebhookSecret)
+	if e != nil {
 		s.fail(c, bad("INVALID_STRIPE_SIGNATURE"))
 		return
 	}
-	var event struct {
-		ID   string `json:"id"`
-		Type string `json:"type"`
-		Data struct {
-			Object json.RawMessage `json:"object"`
-		} `json:"data"`
-	}
-	if e = json.Unmarshal(body, &event); e != nil || event.ID == "" {
+	if event.ID == "" || event.Data == nil {
 		s.fail(c, bad("INVALID_WEBHOOK"))
 		return
 	}
-	allowed := map[string]bool{"checkout.session.completed": true, "customer.subscription.created": true, "customer.subscription.updated": true, "customer.subscription.deleted": true, "invoice.paid": true, "invoice.payment_failed": true}
-	if !allowed[event.Type] {
-		c.JSON(200, gin.H{"status": "ignored"})
-		return
-	}
-	var object struct {
-		ID           string `json:"id"`
-		Customer     string `json:"customer"`
-		Subscription string `json:"subscription"`
-		Parent       struct {
-			Details struct {
-				Subscription string `json:"subscription"`
-			} `json:"subscription_details"`
-		} `json:"parent"`
-	}
-	if e = json.Unmarshal(event.Data.Object, &object); e != nil {
+	customerID, sid, e := stripeEventSubject(event)
+	if e != nil {
 		s.fail(c, bad("INVALID_WEBHOOK"))
 		return
-	}
-	sid := object.Subscription
-	if strings.HasPrefix(event.Type, "customer.subscription.") {
-		sid = object.ID
-	}
-	if sid == "" {
-		sid = object.Parent.Details.Subscription
 	}
 	if sid == "" {
 		c.JSON(200, gin.H{"status": "ignored"})
@@ -375,7 +423,7 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 	var account string
-	e = tx.QueryRow(ctx, `SELECT billing_account_id FROM subscriptions WHERE provider_customer_id=$1 FOR UPDATE`, object.Customer).Scan(&account)
+	e = tx.QueryRow(ctx, `SELECT billing_account_id FROM subscriptions WHERE provider_customer_id=$1 FOR UPDATE`, customerID).Scan(&account)
 	if e == pgx.ErrNoRows {
 		s.fail(c, APIError{"BILLING_CUSTOMER_PENDING", 503})
 		return
@@ -395,12 +443,14 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 		return
 	}
 	// Read Stripe *after* acquiring the account lock. Event delivery order is irrelevant.
-	live, e := s.stripe().GetSubscription(ctx, sid)
+	client := s.stripe()
+	live, e := client.V1Subscriptions.Retrieve(ctx, sid, nil)
 	if e != nil {
 		s.fail(c, APIError{"STRIPE_UNAVAILABLE", 503})
 		return
 	}
-	if live.Customer != object.Customer || live.Metadata["billing_account_id"] != account || len(live.Items.Data) != 1 {
+	item := subscriptionItem(live)
+	if live.Customer == nil || live.Customer.ID != customerID || live.Metadata["billing_account_id"] != account || item == nil {
 		s.fail(c, bad("SUBSCRIPTION_SCOPE_MISMATCH"))
 		return
 	}
@@ -419,7 +469,6 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 		s.fail(c, APIError{"DUPLICATE_SUBSCRIPTION_REVIEW", 409})
 		return
 	}
-	item := live.Items.Data[0]
 	plan, interval := s.mapPrice(item.Price.ID)
 	if plan == "" {
 		s.fail(c, bad("UNRECOGNIZED_PRICE"))
@@ -433,16 +482,12 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 	}
 	if live.Status == "past_due" && grace == nil {
 		// Derive from Stripe's current invoice rather than delayed webhook arrival.
-		var invoiceID string
-		_ = json.Unmarshal(live.LatestInvoice, &invoiceID)
-		if invoiceID == "" {
+		if live.LatestInvoice == nil || live.LatestInvoice.ID == "" {
 			s.fail(c, APIError{"INVOICE_STATE_PENDING", 503})
 			return
 		}
-		var inv struct {
-			Created int64 `json:"created"`
-		}
-		if e = s.stripe().Request(ctx, "GET", "invoices/"+url.PathEscape(invoiceID), "", nil, &inv); e != nil {
+		inv, e := client.V1Invoices.Retrieve(ctx, live.LatestInvoice.ID, nil)
+		if e != nil {
 			s.fail(c, APIError{"STRIPE_UNAVAILABLE", 503})
 			return
 		}
@@ -457,7 +502,11 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 		plan = "free"
 		persistSID = nil
 	}
-	_, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_subscription_id=$1,plan_code=$2,billing_interval=$3,status=$4,current_period_start=$5,current_period_end=$6,cancel_at_period_end=$7,grace_period_until=$8,scheduled_plan=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_plan END,scheduled_interval=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_interval END,provider_schedule_id=$9,retention_grace_until=CASE WHEN plan_code='team' AND $2 IN ('starter','free') OR plan_code='starter' AND $2='free' THEN now()+interval '30 days' ELSE retention_grace_until END,updated_at=now() WHERE billing_account_id=$10`, persistSID, plan, interval, live.Status, time.Unix(item.Start, 0), time.Unix(item.End, 0), live.Cancel, grace, live.Schedule, account)
+	var scheduleID *string
+	if live.Schedule != nil {
+		scheduleID = &live.Schedule.ID
+	}
+	_, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_subscription_id=$1,plan_code=$2,billing_interval=$3,status=$4,current_period_start=$5,current_period_end=$6,cancel_at_period_end=$7,grace_period_until=$8,scheduled_plan=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_plan END,scheduled_interval=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_interval END,provider_schedule_id=$9,retention_grace_until=CASE WHEN plan_code='team' AND $2 IN ('starter','free') OR plan_code='starter' AND $2='free' THEN now()+interval '30 days' ELSE retention_grace_until END,updated_at=now() WHERE billing_account_id=$10`, persistSID, plan, interval, live.Status, time.Unix(item.CurrentPeriodStart, 0), time.Unix(item.CurrentPeriodEnd, 0), live.CancelAtPeriodEnd, grace, scheduleID, account)
 	if e != nil {
 		s.fail(c, e)
 		return

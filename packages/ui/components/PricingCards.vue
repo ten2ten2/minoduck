@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{ busy?: boolean; current?: string; contactEmail?: string }>()
+defineProps<{ busy?: boolean; current?: string; contactEmail?: string }>()
 const emit = defineEmits<{ choose: [plan: string, interval: 'month' | 'year'] }>()
 const { t } = useI18n()
 const interval = ref<'month' | 'year'>('month')

@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
+	stripe "github.com/stripe/stripe-go/v86"
 	"github.com/ten2ten2/minoduck/services/backend/internal/jobs"
 	"github.com/ten2ten2/minoduck/services/backend/internal/ledger"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
@@ -321,8 +322,12 @@ func testStripeReplay(t *testing.T, pool *pgxpool.Pool, app *Server, baseURL, wi
 	})}
 	send := func(id, kind string, want int) {
 		t.Helper()
-		object := map[string]string{"id": sid, "customer": customer, "subscription": sid}
-		b, _ := json.Marshal(map[string]any{"id": id, "type": kind, "data": map[string]any{"object": object}})
+		object := map[string]any{"id": sid, "customer": customer}
+		if strings.HasPrefix(kind, "invoice.") {
+			object["id"] = "in_fixture"
+			object["parent"] = map[string]any{"type": "subscription_details", "subscription_details": map[string]string{"subscription": sid}}
+		}
+		b, _ := json.Marshal(map[string]any{"id": id, "object": "event", "api_version": stripe.APIVersion, "type": kind, "data": map[string]any{"object": object}})
 		stamp := fmt.Sprint(time.Now().Unix())
 		mac := hmac.New(sha256.New, []byte(app.Config.StripeWebhookSecret))
 		mac.Write([]byte(stamp + "."))

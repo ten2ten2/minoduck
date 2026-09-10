@@ -4,7 +4,7 @@ export interface User {
   locale: string
   theme: string
   csrf_token: string
-  locale_explicit?: boolean
+  locale_explicit: boolean
 }
 export interface Workspace {
   id: string

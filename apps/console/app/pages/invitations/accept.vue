@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
-const { api, loadUser, errorText, user } = useApi()
+const { api, loadUser, errorText } = useApi()
 const route = useRoute()
 const token = ref(String(route.query.token ?? '')),
   error = ref(''),

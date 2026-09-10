@@ -33,7 +33,7 @@ useHead(() => ({
         </NuxtLink>
       </nav>
       <div class="row">
-        <PreferencesControl localized-routes />
+        <PreferencesControl />
         <a :href="appLink" class="button primary">{{ t('site.openApp') }}</a>
       </div>
     </header>
