@@ -176,7 +176,6 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 			return e
 		}
 		if e = tx.Commit(ctx); e != nil {
-			_ = w.Objects.Delete(ctx, object)
 			return e
 		}
 	}
