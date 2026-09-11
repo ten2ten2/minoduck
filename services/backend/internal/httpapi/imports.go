@@ -10,6 +10,7 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"io"
 	"strings"
+	"time"
 )
 
 func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -125,6 +126,35 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 	if overlap {
 		return nil, APIError{"POSSIBLE_SOURCE_OVERLAP", 409}
 	}
+	if granularity == "aggregate" {
+		rows, e := tx.Query(ctx, `SELECT source_record_key,period_start,period_end,billing_provider,model_vendor,raw_model_name,charge_category,currency::text,provider_project_ref FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND is_current AND source_scope=$3 AND cost_kind=$4 AND period_start<$6 AND period_end>$5`, c.Param("wid"), aid, scope, kind, p.Start, p.End)
+		if e != nil {
+			return nil, e
+		}
+		existing := map[string][]ledger.Entry{}
+		for rows.Next() {
+			var old ledger.Entry
+			old.Scope, old.Kind = scope, kind
+			if e = rows.Scan(&old.Key, &old.Start, &old.End, &old.Provider, &old.Vendor, &old.Model, &old.Category, &old.Currency, &old.Project); e != nil {
+				rows.Close()
+				return nil, e
+			}
+			dimension := ledger.AggregateDimensionKey(old)
+			existing[dimension] = append(existing[dimension], old)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return nil, e
+		}
+		for _, entry := range p.Entries {
+			for _, old := range existing[ledger.AggregateDimensionKey(entry)] {
+				if old.Key != entry.Key && ledger.PeriodsOverlap(entry.Start, entry.End, old.Start, old.End) {
+					return nil, APIError{"POSSIBLE_SOURCE_OVERLAP", 409}
+				}
+			}
+		}
+	}
 	if !in.ConfirmCorrections {
 		var corrections bool
 		keys := make([]string, len(p.Entries))
@@ -154,3 +184,5 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	return gin.H{"status": "committed", "changed": changed}, platform.Audit(ctx, tx, c.Param("wid"), session(c).UserID, "import.committed", c.Param("iid"), gin.H{"changed": changed, "hash": hash})
 }
+
+var _ = time.Time{}
