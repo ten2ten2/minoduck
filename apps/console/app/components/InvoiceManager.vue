@@ -29,6 +29,13 @@ const form = reactive({
   coverage_confirmed: false,
   evidence_note: '',
 })
+watch(
+  () => form.account_id,
+  (id) => {
+    const account = data.value?.accounts.find((value) => value.id === id)
+    if (account) form.source_scope = account.provider === 'csv' ? 'cost-report' : 'native-cost'
+  },
+)
 const canEdit = computed(() => workspace.value?.role !== 'viewer')
 async function add() {
   busy.value = true
