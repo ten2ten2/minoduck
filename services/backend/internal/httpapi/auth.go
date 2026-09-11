@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gin-gonic/gin"
@@ -164,6 +165,18 @@ func (s *Server) googleStart(c *gin.Context) {
 func (s *Server) googleConfig() oauth2.Config {
 	return oauth2.Config{ClientID: s.Config.GoogleID, ClientSecret: s.Config.GoogleSecret, RedirectURL: s.Config.AppURL + "/api/v1/auth/google/callback", Scopes: []string{oidc.ScopeOpenID, "email"}, Endpoint: oauth2.Endpoint{AuthURL: "https://accounts.google.com/o/oauth2/v2/auth", TokenURL: "https://oauth2.googleapis.com/token"}}
 }
+func googleHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 20 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+func googleContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	return oidc.ClientContext(ctx, googleHTTPClient()), cancel
+}
 func (s *Server) googleCallback(c *gin.Context) {
 	ctx := c.Request.Context()
 	browser, _ := c.Cookie(s.flowCookie())
@@ -177,8 +190,10 @@ func (s *Server) googleCallback(c *gin.Context) {
 		s.fail(c, bad("INVALID_OAUTH_STATE"))
 		return
 	}
+	outbound, cancel := googleContext(ctx)
+	defer cancel()
 	conf := s.googleConfig()
-	token, e := conf.Exchange(ctx, c.Query("code"), oauth2.VerifierOption(verifier))
+	token, e := conf.Exchange(outbound, c.Query("code"), oauth2.VerifierOption(verifier))
 	if e != nil {
 		s.fail(c, bad("OAUTH_FAILED"))
 		return
@@ -188,12 +203,12 @@ func (s *Server) googleCallback(c *gin.Context) {
 		s.fail(c, bad("OAUTH_FAILED"))
 		return
 	}
-	provider, e := oidc.NewProvider(ctx, "https://accounts.google.com")
+	provider, e := oidc.NewProvider(outbound, "https://accounts.google.com")
 	if e != nil {
 		s.fail(c, APIError{"OAUTH_UNAVAILABLE", 503})
 		return
 	}
-	id, e := provider.Verifier(&oidc.Config{ClientID: s.Config.GoogleID}).Verify(ctx, raw)
+	id, e := provider.Verifier(&oidc.Config{ClientID: s.Config.GoogleID}).Verify(outbound, raw)
 	if e != nil || id == nil {
 		s.fail(c, bad("OAUTH_FAILED"))
 		return
@@ -263,5 +278,3 @@ func (s *Server) logout(c *gin.Context) {
 	s.setCookie(c, s.cookieName(), "", -1)
 	c.JSON(200, gin.H{"status": "signed_out"})
 }
-
-var _ = time.Second
