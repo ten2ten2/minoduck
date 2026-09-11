@@ -143,6 +143,14 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		if e = json.Unmarshal(b.Dimensions, &d); e != nil {
 			return nil, e
 		}
+		// Anthropic fast mode has separate premium pricing. Until price versions
+		// model speed explicitly, never apply a standard rate to fast usage. New
+		// Anthropic usage must also carry an inference geography so US-only pricing
+		// cannot be silently merged with global routing.
+		if provider == "anthropic" && (d["region"] == "" || d["speed"] != "standard") {
+			missing = append(missing, b.ID)
+			continue
+		}
 		var rate ledger.RateCard
 		var priceID, basis, ref string
 		e = tx.QueryRow(ctx, `SELECT id,input_per_million::text,output_per_million::text,cache_read_per_million::text,cache_write_5m_per_million::text,cache_write_1h_per_million::text,price_basis,evidence_url FROM price_versions WHERE workspace_id=$1 AND billing_provider=$2 AND model_version=$3 AND currency=$4 AND effective_from<=$5 AND effective_to>=$6 AND service_tier=$7 AND region=$8 AND route=$9`, wid, provider, b.Model, in.Currency, b.Start, b.End, d["service_tier"], d["region"], d["endpoint_id"]).Scan(&priceID, &rate.Input, &rate.Output, &rate.Read, &rate.Write5m, &rate.Write1h, &basis, &ref)
@@ -195,7 +203,7 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	id := uuid.NewString()
-	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, tax, fee and priority charges must be excluded from the declared comparable scope"}})
+	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, tax, fee and priority charges must be excluded from the declared comparable scope", "Anthropic fast-mode usage stays pending until price versions model speed explicitly"}})
 	_, e = tx.Exec(ctx, `INSERT INTO reconciliation_runs(id,workspace_id,account_id,period_start,period_end,run_version,level,expected,billed,difference,currency,match_status,evidence) VALUES($1,$2,$3,$4,$5,$6,'L1',nullif($7,'')::numeric,nullif($8,'')::numeric,nullif($9,'')::numeric,$10,$11,$12)`, id, wid, in.Account, start, end, version, expected, reported, diff, in.Currency, status, details)
 	if e != nil {
 		return nil, e
