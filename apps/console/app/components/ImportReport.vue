@@ -4,7 +4,14 @@ const emit = defineEmits<{ committed: [] }>()
 const { t } = useI18n()
 const { scoped, errorText } = useApi()
 const { money } = useMoney()
-const codeError = (code: string) => errorText({ data: { error: { code } } })
+const codeError = (code: string) =>
+  errorText({
+    data: {
+      error: {
+        code: code === 'OVERLAPPING_AGGREGATE_PERIOD' ? 'DUPLICATE_NATURAL_KEY' : code,
+      },
+    },
+  })
 const account = ref(props.accountId ?? ''),
   scope = ref('cost-report'),
   timezone = ref('UTC'),
