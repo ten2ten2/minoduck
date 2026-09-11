@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import worker from '../infra/cloudflare/redirect.mjs'
-test('canonical redirect preserves paths, encoding, and queries', () => {
+test('canonical redirect preserves paths, encoding, queries, and transport policy', () => {
   for (const path of [
     '/',
     '/zh-hans/pricing?ref=launch&next=%2Fa%2Fb',
@@ -13,6 +13,11 @@ test('canonical redirect preserves paths, encoding, and queries', () => {
     input.hostname = 'www.minoduck.ai'
     assert.equal(result.status, 308)
     assert.equal(result.headers.get('location'), input.href)
+    assert.equal(
+      result.headers.get('strict-transport-security'),
+      'max-age=31536000; includeSubDomains',
+    )
+    assert.equal(result.headers.get('x-content-type-options'), 'nosniff')
   }
 })
 test('app, API, and www never redirect to the canonical root', () => {
