@@ -12,9 +12,9 @@ import (
 
 func providerCapabilities() any {
 	return []gin.H{
-		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-10.1", "warning_key": "providers.openaiWarning", "native": true},
-		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-10.1", "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "native": true},
-		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": "2026-09-10.1", "warning_key": "providers.openrouterWarning", "native": true},
+		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.openaiWarning", "l1_native_cost_comparable": false, "native": true},
+		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "l1_native_cost_comparable": false, "l1_pricing_dimensions": []string{"model", "service_tier", "inference_geo", "speed"}, "native": true},
+		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.openrouterWarning", "l1_native_cost_comparable": false, "native": true},
 		{"id": "csv", "name": "CSV", "credential_kind": "none", "supports_usage": false, "supports_cost": true, "supports_invoice": true, "supports_account_identity_validation": false, "warning_key": "providers.csvWarning", "native": false},
 	}
 }
@@ -39,7 +39,9 @@ func (s *Server) createConnection(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := bind(c, &in); e != nil {
 		return nil, e
 	}
-	if (in.Provider != "openai" && in.Provider != "anthropic" && in.Provider != "openrouter" && in.Provider != "csv") || strings.TrimSpace(in.Name) == "" || len(in.Name) > 100 || strings.TrimSpace(in.AccountRef) == "" || len(in.AccountRef) > 160 || len(in.Credential) > 4096 {
+	in.Name = strings.TrimSpace(in.Name)
+	in.AccountRef = strings.TrimSpace(in.AccountRef)
+	if (in.Provider != "openai" && in.Provider != "anthropic" && in.Provider != "openrouter" && in.Provider != "csv") || in.Name == "" || len(in.Name) > 100 || in.AccountRef == "" || len(in.AccountRef) > 160 || len(in.Credential) > 4096 {
 		return nil, bad("INVALID_CONNECTION")
 	}
 	if e := s.lockAccount(c, tx); e != nil {
@@ -116,14 +118,14 @@ func (s *Server) replaceCredential(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	if provider == "csv" || status == "disconnected" {
-		return nil, bad("CONNECTION_DISCONNECTED")
+	if provider == "csv" {
+		return nil, bad("SYNC_NOT_AVAILABLE")
 	}
 	encrypted, e := platform.Encrypt(s.Config.MasterKey, in.Credential, c.Param("wid")+":"+c.Param("cid"))
 	if e != nil {
 		return nil, APIError{"ENCRYPTION_NOT_CONFIGURED", 503}
 	}
-	if _, e = tx.Exec(c.Request.Context(), `UPDATE provider_accounts SET credential_cipher=$1,credential_key_id=$2,credential_suffix=$3,generation=generation+1,status='validating',error_code=NULL WHERE workspace_id=$4 AND id=$5`, encrypted, s.Config.KeyID, in.Credential[len(in.Credential)-4:], c.Param("wid"), c.Param("cid")); e != nil {
+	if _, e = tx.Exec(c.Request.Context(), `UPDATE provider_accounts SET credential_cipher=$1,credential_key_id=$2,credential_suffix=$3,generation=generation+1,status='validating',error_code=NULL,next_sync_at=now() WHERE workspace_id=$4 AND id=$5`, encrypted, s.Config.KeyID, in.Credential[len(in.Credential)-4:], c.Param("wid"), c.Param("cid")); e != nil {
 		return nil, e
 	}
 	if _, e = tx.Exec(c.Request.Context(), `UPDATE sync_runs SET state='canceled' WHERE workspace_id=$1 AND account_id=$2 AND state IN ('pending','running')`, c.Param("wid"), c.Param("cid")); e != nil {
@@ -133,7 +135,7 @@ func (s *Server) replaceCredential(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	return gin.H{"sync_run_id": id}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "credential.replaced", c.Param("cid"), gin.H{})
+	return gin.H{"sync_run_id": id, "status": "validating", "reconnected": status == "disconnected"}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "credential.replaced", c.Param("cid"), gin.H{"reconnected": status == "disconnected"})
 }
 func (s *Server) disconnect(c *gin.Context, tx pgx.Tx) (any, error) {
 	result, e := tx.Exec(c.Request.Context(), `UPDATE provider_accounts SET status='disconnected',credential_cipher=NULL,credential_suffix=NULL,next_sync_at=NULL,generation=generation+1 WHERE workspace_id=$1 AND id=$2`, c.Param("wid"), c.Param("cid"))
