@@ -95,6 +95,9 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	if _, e := uuid.Parse(in.Account); e != nil || e1 != nil || e2 != nil || !end.After(start) || !ledger.ValidCurrency(in.Currency) {
 		return nil, bad("INVALID_PERIOD")
 	}
+	if strings.TrimSpace(in.Scope) == "" || len(in.Scope) > 120 {
+		return nil, bad("INVALID_SOURCE_SCOPE")
+	}
 	cutoff, historyErr := s.historyCutoff(c, tx)
 	if historyErr != nil {
 		return nil, historyErr
@@ -188,7 +191,11 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	status, diff, e := ledger.Match(expected, reported, "0.01", in.Confirmed && complete && partial == 0)
+	// Native cost endpoints can contain non-text line items that the text Usage
+	// APIs do not expose with a directly comparable model-level scope. Preserve
+	// both figures and evidence, but never label that aggregate as a match.
+	comparable := in.Scope != "native-cost" && in.Confirmed && complete && partial == 0
+	status, diff, e := ledger.Match(expected, reported, "0.01", comparable)
 	if e != nil {
 		return nil, e
 	}
@@ -203,7 +210,7 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	id := uuid.NewString()
-	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, tax, fee and priority charges must be excluded from the declared comparable scope", "Anthropic fast-mode usage stays pending until price versions model speed explicitly"}})
+	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "native_scope_not_comparable": in.Scope == "native-cost", "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, tax, fee and priority charges must be excluded from the declared comparable scope", "Native provider total-cost scopes are evidence only and cannot be labeled matched to text-only calculated usage", "Anthropic fast-mode usage stays pending until price versions model speed explicitly"}})
 	_, e = tx.Exec(ctx, `INSERT INTO reconciliation_runs(id,workspace_id,account_id,period_start,period_end,run_version,level,expected,billed,difference,currency,match_status,evidence) VALUES($1,$2,$3,$4,$5,$6,'L1',nullif($7,'')::numeric,nullif($8,'')::numeric,nullif($9,'')::numeric,$10,$11,$12)`, id, wid, in.Account, start, end, version, expected, reported, diff, in.Currency, status, details)
 	if e != nil {
 		return nil, e
