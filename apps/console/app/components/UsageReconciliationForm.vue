@@ -11,7 +11,7 @@ const form = reactive({
   period_start: '',
   period_end: '',
   currency: 'USD',
-  source_scope: 'native-cost',
+  source_scope: 'cost-report',
   coverage_confirmed: false,
 })
 async function load() {
@@ -77,7 +77,7 @@ async function run() {
         </label>
         <label>
           {{ t('imports.scope') }}
-          <input v-model="form.source_scope" required />
+          <input v-model="form.source_scope" required maxlength="120" />
         </label>
       </div>
       <label class="check">
