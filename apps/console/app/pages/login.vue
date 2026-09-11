@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { t, locale } = useI18n()
-const { api, loadUser, errorText } = useApi()
+const { api, loadUser, errorText, user } = useApi()
 const route = useRoute()
 const { capture } = useBillingIntent()
 capture(route.query)
@@ -16,6 +16,7 @@ if (import.meta.client && (token.value || route.query.ui_locale !== undefined)) 
   delete query.ui_locale
   await navigateTo({ path: '/login', query }, { replace: true })
 }
+if (user.value && !token.value) await navigateTo('/onboarding', { replace: true })
 async function send() {
   busy.value = true
   error.value = ''
