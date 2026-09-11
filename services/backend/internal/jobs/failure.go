@@ -16,7 +16,7 @@ func (w *Worker) failSyncRun(ctx context.Context, wid, rid, code string, disable
 	defer tx.Rollback(ctx)
 	var aid string
 	var generation int
-	e = tx.QueryRow(ctx, `UPDATE sync_runs SET state='failed',finished_at=now(),error_code=coalesce(error_code,$3) WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running') RETURNING account_id,generation`, wid, rid, code).Scan(&aid, &generation)
+	e = tx.QueryRow(ctx, `UPDATE sync_runs SET state='failed',finished_at=now(),error_code=$3 WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running') RETURNING account_id,generation`, wid, rid, code).Scan(&aid, &generation)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil
 	}
