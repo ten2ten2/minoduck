@@ -19,7 +19,7 @@ GitHub CI 执行前后端构建、类型检查、Go 静态检查及 PostgreSQL 1
 
 - [ ] 使用三家真实管理凭据和去敏账单，按币种核对来源金额、费用回补、退款、税费、未知模型和月末/DST 窗口。
 - [ ] 在 Stripe sandbox 完成 Checkout、失败支付、立即升级、期末降级、月/年周期切换、取消、Portal 和 Webhook 回放。
-- [ ] 核对 Stripe 商户主体、税务、发票、退款规则和支持渠道；将 Terms/Privacy 草案替换为正式文本后再启用 live。
+- [ ] 核对 Stripe 商户主体、税务、发票、退款规则和支持渠道；将 Terms/Privacy 草案替换为正式文本，再配置法律发布变量并启用 live。后端会在变量缺失时拒绝 live Stripe 启动。
 - [ ] 验证 Cloudflare/Render 域名、TLS、私有 R2、生产密钥、日志脱敏与权限。
 - [ ] 验证三语言邮件投递和 Google 授权回调；确认生产禁用开发登录入口。
 - [ ] 演练 PostgreSQL/R2 同步恢复、删除清单重放和凭据主密钥恢复。

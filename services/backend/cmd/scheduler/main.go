@@ -38,7 +38,7 @@ func run() error {
 		return e
 	}
 	defer tx.Rollback(ctx)
-	rows, e := tx.Query(ctx, `SELECT a.workspace_id,a.id FROM provider_accounts a JOIN workspaces w ON w.id=a.workspace_id WHERE a.status<>'disconnected' AND a.provider<>'csv' AND a.next_sync_at<=now() AND w.deletion_requested_at IS NULL ORDER BY a.next_sync_at LIMIT 100 FOR UPDATE OF a SKIP LOCKED`)
+	rows, e := tx.Query(ctx, `SELECT a.workspace_id,a.id FROM provider_accounts a JOIN workspaces w ON w.id=a.workspace_id WHERE a.status<>'disconnected' AND a.provider<>'csv' AND NOT a.billing_suspended AND NOT w.billing_suspended AND a.next_sync_at<=now() AND w.deletion_requested_at IS NULL ORDER BY a.next_sync_at LIMIT 100`)
 	if e != nil {
 		return e
 	}

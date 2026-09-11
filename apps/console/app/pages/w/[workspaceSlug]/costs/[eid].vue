@@ -5,7 +5,7 @@ const { money, date } = useMoney()
 const route = useRoute()
 const { data, error } = await useAsyncData(
   () => `cost-${workspace.value?.id}-${route.params.eid}`,
-  (_app, { signal }) => scoped(`/costs/${route.params.eid}`, { signal }),
+  (_app, { signal }) => scoped<CostDetailResponse>(`/costs/${route.params.eid}`, { signal }),
 )
 </script>
 <template>

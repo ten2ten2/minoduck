@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
-const { scoped, workspace, errorText } = useApi()
+const { scoped, workspace, errorText, errorCode } = useApi()
 const { money, date } = useMoney()
 const route = useRoute()
 const now = new Date()
@@ -21,7 +21,8 @@ const page = ref(Number(route.query.page ?? 1)),
   busy = ref(false)
 const { data, error, status, refresh } = await useAsyncData(
   () => `costs-${workspace.value?.id}`,
-  (_app, { signal }) => scoped('/costs', { signal, query: { ...filters, page: page.value } }),
+  (_app, { signal }) =>
+    scoped<CostsResponse>('/costs', { signal, query: { ...filters, page: page.value } }),
 )
 async function apply(nextPage = 1) {
   page.value = nextPage
@@ -95,7 +96,7 @@ async function exportCSV() {
     </form>
     <div v-if="message" class="notice" role="status">{{ message }}</div>
     <div v-if="actionError" class="notice error" role="alert">{{ actionError }}</div>
-    <UpgradeNotice v-if="(error?.data as any)?.error?.code === 'HISTORY_LIMIT'" />
+    <UpgradeNotice v-if="errorCode(error) === 'HISTORY_LIMIT'" />
     <div v-else-if="error" class="notice error" role="alert">{{ errorText(error) }}</div>
     <article v-else class="panel" :aria-busy="status === 'pending'">
       <div v-if="data?.items?.length" class="table-scroll">

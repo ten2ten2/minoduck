@@ -7,8 +7,8 @@ const { data, error, refresh } = await useAsyncData(
   () => `invoices-${workspace.value?.id}-${props.id ?? 'all'}`,
   async (_app, { signal }) => {
     const [invoices, accounts] = await Promise.all([
-      scoped<any[]>('/invoices', { signal }),
-      scoped<any[]>('/connections', { signal }),
+      scoped<Invoice[]>('/invoices', { signal }),
+      scoped<Connection[]>('/connections', { signal }),
     ])
     return { invoices, accounts }
   },

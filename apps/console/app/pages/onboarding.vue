@@ -11,7 +11,7 @@ async function create() {
   busy.value = true
   error.value = ''
   try {
-    const w = await api('/workspaces', {
+    const w = await api<Workspace>('/workspaces', {
       method: 'POST',
       body: { name: name.value, slug: slug.value },
     })

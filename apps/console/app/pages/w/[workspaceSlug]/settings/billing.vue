@@ -5,7 +5,7 @@ const { money, date } = useMoney()
 const route = useRoute()
 const { data, error, refresh } = await useAsyncData(
   () => `billing-${workspace.value?.id}`,
-  (_app, { signal }) => scoped('/subscription', { signal }),
+  (_app, { signal }) => scoped<BillingResponse>('/subscription', { signal }),
 )
 const busy = ref(false),
   actionError = ref(''),
@@ -29,7 +29,7 @@ async function checkout(plan: string, interval: string) {
   busy.value = true
   actionError.value = ''
   try {
-    const out = await scoped('/subscription/checkout', {
+    const out = await scoped<ApiAction>('/subscription/checkout', {
       method: 'POST',
       body: { plan, billing_interval: interval },
     })
@@ -49,10 +49,14 @@ async function change() {
   busy.value = true
   actionError.value = ''
   try {
-    const out = await scoped('/subscription/change', {
+    const out = await scoped<ApiAction>('/subscription/change', {
       method: 'POST',
       body: { plan: selection.value.plan, billing_interval: selection.value.interval },
     })
+    if (out.status === 'requires_action' && out.action_url) {
+      await navigateTo(out.action_url, { external: true })
+      return
+    }
     notice.value = out.status === 'scheduled' ? 'billing.scheduled' : 'billing.pending'
     selection.value = undefined
     await refresh()
@@ -69,7 +73,7 @@ async function cancelScheduled() {
   busy.value = true
   actionError.value = ''
   try {
-    const out = await scoped('/subscription/change', {
+    const out = await scoped<ApiAction>('/subscription/change', {
       method: 'POST',
       body: { plan, billing_interval: interval },
     })
@@ -85,7 +89,7 @@ async function portal() {
   busy.value = true
   actionError.value = ''
   try {
-    const out = await scoped('/subscription/portal', { method: 'POST' })
+    const out = await scoped<ApiAction>('/subscription/portal', { method: 'POST' })
     await navigateTo(out.url, { external: true })
   } catch (e) {
     actionError.value = errorText(e)
@@ -158,11 +162,7 @@ async function resume() {
         </div>
         <div v-if="data.subscription.cancel_at_period_end" class="notice warning row between">
           <span>{{ t('billing.cancelHelp') }}</span>
-          <button
-            v-if="canManage"
-            :disabled="busy || !data.stripe_configured"
-            @click="resume"
-          >
+          <button v-if="canManage" :disabled="busy || !data.stripe_configured" @click="resume">
             {{ t('common.save') }} · {{ t('billing.current') }}
           </button>
         </div>
@@ -180,7 +180,9 @@ async function resume() {
           <button :disabled="busy || !data.stripe_configured" @click="portal">
             {{ t('billing.portal') }}
           </button>
-          <details v-if="data.entitlements.code !== 'free' && !data.subscription.cancel_at_period_end">
+          <details
+            v-if="data.entitlements.code !== 'free' && !data.subscription.cancel_at_period_end"
+          >
             <summary class="danger">{{ t('billing.cancel') }}</summary>
             <p class="muted">{{ t('billing.cancelHelp') }}</p>
             <button class="danger" :disabled="busy" @click="cancel">
@@ -207,6 +209,7 @@ async function resume() {
       <PricingCards
         :busy="busy || !canManage || !data.stripe_configured"
         :current="data.entitlements.code"
+        :current-interval="data.subscription.billing_interval"
         @choose="choose"
       />
     </template>

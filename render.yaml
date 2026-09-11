@@ -51,6 +51,16 @@ envVarGroups:
         sync: false
       - key: STRIPE_PRICE_TEAM_YEARLY
         sync: false
+      - key: LEGAL_RELEASE_APPROVED
+        value: 'false'
+      - key: LEGAL_ENTITY_NAME
+        sync: false
+      - key: LEGAL_CONTACT_EMAIL
+        sync: false
+      - key: LEGAL_TERMS_EFFECTIVE_DATE
+        sync: false
+      - key: LEGAL_PRIVACY_EFFECTIVE_DATE
+        sync: false
 services:
   - type: web
     name: minoduck-api

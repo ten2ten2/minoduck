@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
+	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"net/mail"
 	"regexp"
@@ -15,7 +16,7 @@ import (
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,47}$`)
 
 func (s *Server) listWorkspaces(c *gin.Context) {
-	rows, e := s.DB.Query(c.Request.Context(), `SELECT json_build_object('id',w.id,'slug',w.slug,'name',w.name,'role',m.role) FROM workspaces w JOIN workspace_members m ON m.workspace_id=w.id WHERE m.user_id=$1 AND w.deletion_requested_at IS NULL ORDER BY w.created_at,w.id`, session(c).UserID)
+	rows, e := s.DB.Query(c.Request.Context(), `SELECT json_build_object('id',w.id,'slug',w.slug,'name',w.name,'role',m.role,'billing_suspended',w.billing_suspended) FROM workspaces w JOIN workspace_members m ON m.workspace_id=w.id WHERE m.user_id=$1 AND NOT m.billing_suspended AND w.deletion_requested_at IS NULL ORDER BY w.created_at,w.id`, session(c).UserID)
 	if e != nil {
 		s.fail(c, e)
 		return
@@ -110,7 +111,7 @@ func (s *Server) createWorkspace(c *gin.Context) {
 }
 func (s *Server) workspace(c *gin.Context, tx pgx.Tx) (any, error) {
 	var b []byte
-	e := tx.QueryRow(c.Request.Context(), `SELECT json_build_object('id',id,'slug',slug,'name',name) FROM workspaces WHERE id=$1`, c.Param("wid")).Scan(&b)
+	e := tx.QueryRow(c.Request.Context(), `SELECT json_build_object('id',id,'slug',slug,'name',name,'billing_suspended',billing_suspended) FROM workspaces WHERE id=$1`, c.Param("wid")).Scan(&b)
 	return json.RawMessage(b), e
 }
 func (s *Server) updateWorkspace(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -131,11 +132,10 @@ func (s *Server) updateWorkspace(c *gin.Context, tx pgx.Tx) (any, error) {
 	return gin.H{"status": "saved"}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "workspace.updated", c.Param("wid"), in)
 }
 func (s *Server) members(c *gin.Context, tx pgx.Tx) (any, error) {
-	return platform.JSONRows(c.Request.Context(), tx, `SELECT json_build_object('id',u.id,'email',u.email,'role',m.role,'created_at',m.created_at) FROM workspace_members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=$1 ORDER BY m.created_at,u.id`, c.Param("wid"))
+	return platform.JSONRows(c.Request.Context(), tx, `SELECT json_build_object('id',u.id,'email',u.email,'role',m.role,'created_at',m.created_at,'billing_suspended',m.billing_suspended) FROM workspace_members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=$1 ORDER BY m.created_at,u.id`, c.Param("wid"))
 }
 func (s *Server) lockAccount(c *gin.Context, tx pgx.Tx) error {
-	_, e := tx.Exec(c.Request.Context(), `SELECT id FROM billing_accounts WHERE id=$1 FOR UPDATE`, c.GetString("billing_account_id"))
-	return e
+	return subscriptions.LockAccount(c.Request.Context(), tx, c.GetString("billing_account_id"))
 }
 func (s *Server) invite(c *gin.Context, tx pgx.Tx) (any, error) {
 	var in struct {
@@ -190,8 +190,11 @@ func (s *Server) invite(c *gin.Context, tx pgx.Tx) (any, error) {
 	audit := func() error {
 		return platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "member.invited", id, gin.H{"role": in.Role})
 	}
-	if s.Config.Env != "production" && s.Config.ResendKey == "" {
+	if s.developmentLinksAllowed() && s.Config.ResendKey == "" {
 		return gin.H{"id": id, "development_link": link}, audit()
+	}
+	if s.Config.ResendKey == "" {
+		return nil, APIError{"EMAIL_NOT_CONFIGURED", 503}
 	}
 	subject, body := "Your MinoDuck invitation", "Sign in with "+email+", then open this invitation:\n"+link
 	if session(c).Locale == "zh-hans" {
@@ -202,8 +205,13 @@ func (s *Server) invite(c *gin.Context, tx pgx.Tx) (any, error) {
 		subject = "MinoDuck 邀請"
 		body = "請使用 " + email + " 登入，再開啟邀請：\n" + link
 	}
-	if e = platform.SendMail(c.Request.Context(), s.Config, email, subject, body, id); e != nil {
-		return nil, APIError{"EMAIL_DELIVERY_FAILED", 503}
+	payload, _ := json.Marshal(gin.H{"invitation_id": id, "link": link, "subject": subject, "body": body})
+	nid := uuid.NewString()
+	if _, e = tx.Exec(c.Request.Context(), `INSERT INTO notification_deliveries(id,workspace_id,dedupe_key,recipient,locale,template,payload) VALUES($1,$2,$3,$4,$5,'invitation',$6)`, nid, c.Param("wid"), "invitation:"+id, email, session(c).Locale, payload); e != nil {
+		return nil, e
+	}
+	if _, e = s.Queue.InsertTx(c.Request.Context(), tx, tasks.Args{Task: "notification", WorkspaceID: c.Param("wid"), ResourceID: nid}, nil); e != nil {
+		return nil, e
 	}
 	return gin.H{"id": id}, audit()
 }
@@ -223,13 +231,26 @@ func (s *Server) acceptInvitation(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 	var id, wid, role, account string
-	e = tx.QueryRow(ctx, `SELECT i.id,i.workspace_id,i.role,w.billing_account_id FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE i.token_hash=$1 AND i.email=$2 AND i.expires_at>now() AND i.accepted_at IS NULL AND w.deletion_requested_at IS NULL FOR UPDATE OF i`, platform.TokenHash(in.Token), session(c).Email).Scan(&id, &wid, &role, &account)
-	if e != nil {
+	e = tx.QueryRow(ctx, `SELECT w.billing_account_id FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE i.token_hash=$1 AND i.email=$2 AND i.expires_at>now() AND i.accepted_at IS NULL AND w.deletion_requested_at IS NULL`, platform.TokenHash(in.Token), session(c).Email).Scan(&account)
+	if e == pgx.ErrNoRows {
 		s.fail(c, bad("INVALID_INVITATION"))
+		return
+	}
+	if e != nil {
+		s.fail(c, e)
 		return
 	}
 	c.Set("billing_account_id", account)
 	if e = s.lockAccount(c, tx); e != nil {
+		s.fail(c, e)
+		return
+	}
+	e = tx.QueryRow(ctx, `SELECT i.id,i.workspace_id,i.role,w.billing_account_id FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE i.token_hash=$1 AND i.email=$2 AND i.expires_at>now() AND i.accepted_at IS NULL AND w.deletion_requested_at IS NULL FOR UPDATE OF i`, platform.TokenHash(in.Token), session(c).Email).Scan(&id, &wid, &role, &account)
+	if e == pgx.ErrNoRows {
+		s.fail(c, bad("INVALID_INVITATION"))
+		return
+	}
+	if e != nil {
 		s.fail(c, e)
 		return
 	}

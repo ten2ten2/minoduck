@@ -15,6 +15,9 @@ jobs:
         with: { node-version-file: '.node-version' }
       - uses: pnpm/action-setup@v6.1.0
       - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm check:a11y
       - run: pnpm check:locales
       - run: pnpm test
       - run: pnpm typecheck

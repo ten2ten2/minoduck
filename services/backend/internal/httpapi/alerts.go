@@ -192,7 +192,7 @@ func (s *Server) downloadExport(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 	var key string
-	e = tx.QueryRow(ctx, `SELECT x.object_key FROM exports x JOIN workspace_members m ON m.workspace_id=x.workspace_id JOIN workspaces w ON w.id=x.workspace_id WHERE x.workspace_id=$1 AND x.id=$2 AND m.user_id=$3 AND w.deletion_requested_at IS NULL AND x.state='ready' AND x.expires_at>now()`, c.Param("wid"), c.Param("eid"), session(c).UserID).Scan(&key)
+	e = tx.QueryRow(ctx, `SELECT x.object_key FROM exports x JOIN workspace_members m ON m.workspace_id=x.workspace_id JOIN workspaces w ON w.id=x.workspace_id WHERE x.workspace_id=$1 AND x.id=$2 AND m.user_id=$3 AND NOT m.billing_suspended AND w.deletion_requested_at IS NULL AND x.state='ready' AND x.expires_at>now()`, c.Param("wid"), c.Param("eid"), session(c).UserID).Scan(&key)
 	if e != nil {
 		s.fail(c, pgx.ErrNoRows)
 		return

@@ -103,6 +103,19 @@ func TestEventIdentityUsesStableSourceID(t *testing.T) {
 		t.Fatal("different source event IDs shared an identity")
 	}
 }
+func TestCSVBoundsEvidenceWindows(t *testing.T) {
+	header := "period_start,period_end,model,amount,currency,charge_category,coverage\n"
+	future, err := ParseCSV([]byte(header+"2099-01-01,2099-01-02,model,1,USD,usage,complete\n"), "custom", "scope", "UTC", "actual", "aggregate")
+	if err != nil || future.Rejected != 1 || future.Errors[0].Code != "INVALID_PERIOD" {
+		t.Fatalf("future period was accepted: %+v %v", future, err)
+	}
+	tooWide := header +
+		"2024-01-01,2025-01-01,model-a,1,USD,usage,complete\n" +
+		"2025-01-02,2025-01-03,model-b,1,USD,usage,complete\n"
+	if _, err = ParseCSV([]byte(tooWide), "custom", "scope", "UTC", "actual", "aggregate"); err == nil || err.Error() != "PERIOD_SPAN_TOO_LARGE" {
+		t.Fatalf("wide import was accepted: %v", err)
+	}
+}
 func TestCSVInjection(t *testing.T) {
 	for _, v := range []string{"=SUM(A1)", "  @x", "\t-cmd"} {
 		if SafeCell(v) != "'"+v {

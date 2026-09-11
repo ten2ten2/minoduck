@@ -9,8 +9,9 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (!user.value) {
     try {
       await load()
-    } catch (error: any) {
-      if (error?.status === 401 || error?.statusCode === 401) {
+    } catch (error: unknown) {
+      const failure = error as { status?: unknown; statusCode?: unknown } | null
+      if (failure?.status === 401 || failure?.statusCode === 401) {
         return isLogin ? undefined : navigateTo('/login')
       }
       throw createError({ statusCode: 503, statusMessage: 'Application service unavailable' })

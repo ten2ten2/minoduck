@@ -15,6 +15,40 @@ import (
 	"time"
 )
 
+func (s *Server) developmentLinksAllowed() bool {
+	u, err := url.Parse(s.Config.AppURL)
+	return err == nil && s.Config.Env == "development" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1")
+}
+
+func authClientHash(c *gin.Context) string {
+	value := c.GetHeader("X-MinoDuck-Client-Hash")
+	if len(value) != 64 {
+		value = c.ClientIP()
+	}
+	return platform.TokenHash(value)
+}
+
+func recordAuthAttempt(ctx context.Context, tx pgx.Tx, kind, subject, client string, subject15, subjectDay, client15, clientDay int) (bool, error) {
+	subjectHash := platform.TokenHash(subject)
+	// Serialize each independent quota dimension. A combined subject/client key
+	// would still let many clients race the same email (or vice versa).
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "auth:"+kind+":subject:"+subjectHash); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "auth:"+kind+":client:"+client); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth_rate_events(kind,subject_hash,client_hash) VALUES($1,$2,$3)`, kind, subjectHash, client); err != nil {
+		return false, err
+	}
+	var s15, sd, c15, cd int
+	err := tx.QueryRow(ctx, `SELECT count(*) FILTER(WHERE subject_hash=$2 AND created_at>now()-interval '15 minutes'),count(*) FILTER(WHERE subject_hash=$2 AND created_at>now()-interval '1 day'),count(*) FILTER(WHERE client_hash=$3 AND created_at>now()-interval '15 minutes'),count(*) FILTER(WHERE client_hash=$3 AND created_at>now()-interval '1 day') FROM auth_rate_events WHERE kind=$1 AND created_at>now()-interval '1 day'`, kind, subjectHash, client).Scan(&s15, &sd, &c15, &cd)
+	if err != nil {
+		return false, err
+	}
+	return s15 > subject15 || sd > subjectDay || c15 > client15 || cd > clientDay, nil
+}
+
 func (s *Server) setCookie(c *gin.Context, name, value string, age int) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: name, Value: value, Path: "/", Secure: s.Config.Env == "production", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: age})
 }
@@ -46,8 +80,18 @@ func (s *Server) emailStart(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); e != nil {
+	limited, e := recordAuthAttempt(ctx, tx, "email", email, authClientHash(c), 5, 20, 20, 100)
+	if e != nil {
 		s.fail(c, e)
+		return
+	}
+	if limited {
+		if e = tx.Commit(ctx); e != nil {
+			s.fail(c, e)
+			return
+		}
+		c.Header("Retry-After", "900")
+		s.fail(c, APIError{"RATE_LIMITED", 429})
 		return
 	}
 	var n int
@@ -81,8 +125,13 @@ func (s *Server) emailStart(c *gin.Context) {
 		subject = "登入 MinoDuck"
 		body = "請在發起登入的瀏覽器中開啟以下連結，15 分鐘內有效：\n\n" + link
 	}
-	if s.Config.Env != "production" && s.Config.ResendKey == "" {
+	if s.developmentLinksAllowed() && s.Config.ResendKey == "" {
 		c.JSON(202, gin.H{"status": "email_sent", "development_link": link})
+		return
+	}
+	if s.Config.ResendKey == "" {
+		_, _ = s.DB.Exec(ctx, `DELETE FROM login_tokens WHERE token_hash=$1`, platform.TokenHash(token))
+		s.fail(c, APIError{"EMAIL_NOT_CONFIGURED", 503})
 		return
 	}
 	if e = platform.SendMail(ctx, s.Config, email, subject, body, "login-"+platform.TokenHash(token)); e != nil {
@@ -114,8 +163,12 @@ func (s *Server) emailVerify(c *gin.Context) {
 	defer tx.Rollback(ctx)
 	var email string
 	e = tx.QueryRow(ctx, `DELETE FROM login_tokens WHERE token_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING email`, platform.TokenHash(in.Token), platform.TokenHash(browser)).Scan(&email)
-	if e != nil {
+	if e == pgx.ErrNoRows {
 		s.fail(c, bad("INVALID_LOGIN_LINK"))
+		return
+	}
+	if e != nil {
+		s.fail(c, e)
 		return
 	}
 	token, e := s.newSession(c, tx, email)
@@ -153,8 +206,32 @@ func (s *Server) googleStart(c *gin.Context) {
 		return
 	}
 	state, browser, nonce, verifier := platform.RandomToken(), platform.RandomToken(), platform.RandomToken(), oauth2.GenerateVerifier()
-	_, e := s.DB.Exec(c.Request.Context(), `INSERT INTO oauth_states(state_hash,browser_hash,verifier,nonce,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')`, platform.TokenHash(state), platform.TokenHash(browser), verifier, nonce)
+	tx, e := s.DB.Begin(c.Request.Context())
 	if e != nil {
+		s.fail(c, e)
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	clientHash := authClientHash(c)
+	limited, e := recordAuthAttempt(c.Request.Context(), tx, "google", clientHash, clientHash, 20, 100, 20, 100)
+	if e != nil {
+		s.fail(c, e)
+		return
+	}
+	if limited {
+		if e = tx.Commit(c.Request.Context()); e != nil {
+			s.fail(c, e)
+			return
+		}
+		c.Header("Retry-After", "900")
+		s.fail(c, APIError{"RATE_LIMITED", 429})
+		return
+	}
+	if _, e = tx.Exec(c.Request.Context(), `INSERT INTO oauth_states(state_hash,browser_hash,verifier,nonce,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')`, platform.TokenHash(state), platform.TokenHash(browser), verifier, nonce); e != nil {
+		s.fail(c, e)
+		return
+	}
+	if e = tx.Commit(c.Request.Context()); e != nil {
 		s.fail(c, e)
 		return
 	}
@@ -186,8 +263,12 @@ func (s *Server) googleCallback(c *gin.Context) {
 	}
 	var verifier, nonce string
 	e := s.DB.QueryRow(ctx, `DELETE FROM oauth_states WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING verifier,nonce`, platform.TokenHash(c.Query("state")), platform.TokenHash(browser)).Scan(&verifier, &nonce)
-	if e != nil {
+	if e == pgx.ErrNoRows {
 		s.fail(c, bad("INVALID_OAUTH_STATE"))
+		return
+	}
+	if e != nil {
+		s.fail(c, e)
 		return
 	}
 	outbound, cancel := googleContext(ctx)

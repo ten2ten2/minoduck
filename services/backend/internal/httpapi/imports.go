@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -9,7 +10,10 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"io"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -61,13 +65,17 @@ func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
 	if p.Rejected > 0 {
 		state = "rejected"
 	}
+	if e = platform.RegisterObjectIntent(c.Request.Context(), s.DB, c.Param("wid"), key, "source"); e != nil {
+		return nil, APIError{"STORAGE_UNAVAILABLE", 503}
+	}
 	if e = s.Objects.Put(c.Request.Context(), key, data); e != nil {
+		_ = platform.CleanupObject(context.Background(), s.DB, s.Objects, c.Param("wid"), key)
 		return nil, APIError{"STORAGE_UNAVAILABLE", 503}
 	}
 	preview, _ := json.Marshal(p)
-	_, e = tx.Exec(c.Request.Context(), `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, c.Param("wid"), aid, key, p.Hash, scope, kind, zone, granularity, state, preview)
+	_, e = tx.Exec(c.Request.Context(), `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview,period_start,period_end) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, id, c.Param("wid"), aid, key, p.Hash, scope, kind, zone, granularity, state, preview, p.Start, p.End)
 	if e != nil {
-		_ = s.Objects.Delete(c.Request.Context(), key)
+		_ = platform.CleanupObject(context.Background(), s.DB, s.Objects, c.Param("wid"), key)
 		return nil, e
 	}
 	c.Set("response_status", 201)
@@ -91,7 +99,7 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	if state == "committed" {
+	if state == "committed" || state == "superseded" {
 		return gin.H{"status": "already_committed", "changed": 0}, nil
 	}
 	if state != "preview_ready" {
@@ -168,11 +176,14 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 			return nil, APIError{"CONFIRM_CORRECTIONS", 409}
 		}
 	}
-	changed, e := ledger.Publish(ctx, tx, c.Param("wid"), aid, c.Param("iid"), p.Entries)
+	changed, e := s.publishImportPartitions(ctx, tx, c.Param("wid"), aid, c.Param("iid"), scope, kind, zone, granularity, p.Entries)
 	if e != nil {
 		return nil, e
 	}
-	if _, e = tx.Exec(ctx, `UPDATE source_batches SET state='committed',committed_at=now() WHERE workspace_id=$1 AND id=$2`, c.Param("wid"), c.Param("iid")); e != nil {
+	// The uploaded CSV is a short-lived preview object. Committed evidence is
+	// normalized into retention-aligned shards so one recent row cannot retain
+	// unrelated historical rows.
+	if _, e = tx.Exec(ctx, `UPDATE source_batches SET state='superseded',committed_at=now() WHERE workspace_id=$1 AND id=$2`, c.Param("wid"), c.Param("iid")); e != nil {
 		return nil, e
 	}
 	if _, e = tx.Exec(ctx, `UPDATE provider_accounts SET last_sync_at=now(),data_through=greatest(data_through,$1) WHERE workspace_id=$2 AND id=$3`, p.End, c.Param("wid"), aid); e != nil {
@@ -182,4 +193,70 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	return gin.H{"status": "committed", "changed": changed}, platform.Audit(ctx, tx, c.Param("wid"), session(c).UserID, "import.committed", c.Param("iid"), gin.H{"changed": changed, "hash": hash})
+}
+
+func importRetentionBucket(end time.Time) string {
+	// Evidence with periods ending in the same UTC week expires together. This
+	// bounds raw evidence retention drift to at most seven days.
+	return strconv.FormatInt(end.UTC().Unix()/(7*24*60*60), 10)
+}
+
+func (s *Server) publishImportPartitions(ctx context.Context, tx pgx.Tx, wid, aid, importID, scope, kind, zone, granularity string, entries []ledger.Entry) (_ int, err error) {
+	groups := map[string][]ledger.Entry{}
+	for _, entry := range entries {
+		groups[importRetentionBucket(entry.End)] = append(groups[importRetentionBucket(entry.End)], entry)
+	}
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	created := []string{}
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, key := range created {
+			_ = platform.CleanupObject(context.Background(), s.DB, s.Objects, wid, key)
+		}
+	}()
+	changed := 0
+	for _, partition := range keys {
+		rows := groups[partition]
+		for i := range rows {
+			rows[i].SourceRef = "/entries/" + strconv.Itoa(i)
+		}
+		data, marshalErr := json.Marshal(gin.H{"source_import_id": importID, "entries": rows})
+		if marshalErr != nil {
+			return 0, marshalErr
+		}
+		batch, object := uuid.NewString(), wid+"/"+uuid.NewString()+".json"
+		if err = platform.RegisterObjectIntent(ctx, s.DB, wid, object, "source"); err != nil {
+			return 0, err
+		}
+		if err = s.Objects.Put(ctx, object, data); err != nil {
+			_ = platform.CleanupObject(context.Background(), s.DB, s.Objects, wid, object)
+			return 0, APIError{"STORAGE_UNAVAILABLE", 503}
+		}
+		created = append(created, object)
+		start, end := rows[0].Start, rows[0].End
+		for _, entry := range rows[1:] {
+			if entry.Start.Before(start) {
+				start = entry.Start
+			}
+			if entry.End.After(end) {
+				end = entry.End
+			}
+		}
+		preview, _ := json.Marshal(gin.H{"period_start": start, "period_end": end, "row_count": len(rows), "normalized_from_import": importID})
+		if _, err = tx.Exec(ctx, `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview,period_start,period_end,committed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'committed',$10,$11,$12,now())`, batch, wid, aid, object, ledger.Hash(data), scope, kind, zone, granularity, preview, start, end); err != nil {
+			return 0, err
+		}
+		var count int
+		if count, err = ledger.Publish(ctx, tx, wid, aid, batch, rows); err != nil {
+			return 0, err
+		}
+		changed += count
+	}
+	return changed, nil
 }

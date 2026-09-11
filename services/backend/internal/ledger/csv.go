@@ -159,7 +159,7 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 		}
 		start, e1 := parseTime(get("period_start"))
 		end, e2 := parseTime(get("period_end"))
-		if e1 != nil || e2 != nil || !end.After(start) {
+		if e1 != nil || e2 != nil || !end.After(start) || end.After(start.AddDate(1, 0, 0)) || end.After(time.Now().UTC().AddDate(0, 0, 45)) {
 			reject("INVALID_PERIOD")
 			continue
 		}
@@ -234,6 +234,9 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 	}
 	if p.Count == 0 {
 		return p, fmt.Errorf("EMPTY_FILE")
+	}
+	if p.Start != nil && p.End != nil && p.End.After(p.Start.AddDate(1, 0, 0)) {
+		return p, fmt.Errorf("PERIOD_SPAN_TOO_LARGE")
 	}
 	return p, nil
 }

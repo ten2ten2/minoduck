@@ -56,6 +56,9 @@ func (s *Server) createPrice(c *gin.Context, tx pgx.Tx) (any, error) {
 			return nil, bad("INVALID_RATE")
 		}
 	}
+	if _, e = tx.Exec(c.Request.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "price-snapshot:"+c.Param("wid")+":"+in.Provider); e != nil {
+		return nil, e
+	}
 	if _, e = tx.Exec(c.Request.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, c.Param("wid")+in.Provider+in.Model+in.Tier+in.Region+in.Route); e != nil {
 		return nil, e
 	}
@@ -113,6 +116,9 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "price-snapshot:"+wid+":"+provider); e != nil {
+		return nil, e
+	}
 	rows, e := tx.Query(ctx, `SELECT id,model,period_start,period_end,metrics,dimensions,source_batch_id FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND period_start>=$3 AND period_end<=$4 ORDER BY period_start,id`, wid, in.Account, start, end)
 	if e != nil {
 		return nil, e
@@ -139,6 +145,11 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	calculated := decimal.Zero
 	evidence := []gin.H{}
 	missing := []string{}
+	var usageBoundary bool
+	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND period_start<$4 AND period_end>$3 AND (period_start<$3 OR period_end>$4))`, wid, in.Account, start, end).Scan(&usageBoundary)
+	if e != nil {
+		return nil, e
+	}
 	for _, b := range buckets {
 		var m, d map[string]string
 		if e = json.Unmarshal(b.Metrics, &m); e != nil {
@@ -152,6 +163,10 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		// Anthropic usage must also carry an inference geography so US-only pricing
 		// cannot be silently merged with global routing.
 		if provider == "anthropic" && (d["region"] == "" || d["speed"] != "standard") {
+			missing = append(missing, b.ID)
+			continue
+		}
+		if !textUsageComparable(provider, m, d) {
 			missing = append(missing, b.ID)
 			continue
 		}
@@ -184,6 +199,11 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	var costBoundary bool
+	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND is_current AND cost_kind='actual' AND currency=$3 AND source_scope=$4 AND period_start<$6 AND period_end>$5 AND (period_start<$5 OR period_end>$6))`, wid, in.Account, in.Currency, in.Scope, start, end).Scan(&costBoundary)
+	if e != nil {
+		return nil, e
+	}
 	expected := ""
 	if usageComplete && len(missing) == 0 {
 		expected = calculated.String()
@@ -199,12 +219,12 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 	// Native cost endpoints can contain non-text line items that the text Usage
 	// APIs do not expose with a directly comparable model-level scope. Preserve
 	// both figures and evidence, but never label that aggregate as a match.
-	comparable := usageComplete && in.Scope != "native-cost" && in.Confirmed && complete && partial == 0
+	comparable := usageComplete && !usageBoundary && !costBoundary && in.Scope != "native-cost" && in.Confirmed && complete && partial == 0
 	status, diff, e := ledger.Match(expected, reported, "0.01", comparable)
 	if e != nil {
 		return nil, e
 	}
-	if !usageComplete || expected == "" || reported == "" {
+	if !usageComplete || usageBoundary || costBoundary || expected == "" || reported == "" {
 		status = "pending_source"
 		diff = ""
 	}
@@ -215,11 +235,46 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	id := uuid.NewString()
-	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "usage_coverage_complete": usageComplete, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "native_scope_not_comparable": in.Scope == "native-cost", "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, tax, fee and priority charges must be excluded from the declared comparable scope", "Missing usage sync windows are not treated as zero usage", "Native provider total-cost scopes are evidence only and cannot be labeled matched to text-only calculated usage", "Anthropic fast-mode usage stays pending until price versions model speed explicitly"}})
+	details, _ := json.Marshal(gin.H{"price_evidence": evidence, "missing_usage_or_prices": missing, "usage_coverage_complete": usageComplete, "usage_boundary_overlap": usageBoundary, "cost_boundary_overlap": costBoundary, "period_start": start, "period_end": end, "source_scope": in.Scope, "coverage_confirmed": in.Confirmed, "actual_missing": actual == nil, "native_scope_not_comparable": in.Scope == "native-cost", "text_only": true, "assumptions": []string{"L1 covers text usage only; non-text, batch, tax, fee and priority charges must be excluded from the declared comparable scope", "Missing usage sync windows are not treated as zero usage", "Native provider total-cost scopes are evidence only and cannot be labeled matched to text-only calculated usage", "Anthropic fast-mode usage stays pending until price versions model speed explicitly"}})
 	_, e = tx.Exec(ctx, `INSERT INTO reconciliation_runs(id,workspace_id,account_id,period_start,period_end,run_version,level,expected,billed,difference,currency,match_status,evidence) VALUES($1,$2,$3,$4,$5,$6,'L1',nullif($7,'')::numeric,nullif($8,'')::numeric,nullif($9,'')::numeric,$10,$11,$12)`, id, wid, in.Account, start, end, version, expected, reported, diff, in.Currency, status, details)
 	if e != nil {
 		return nil, e
 	}
 	c.Set("response_status", 201)
 	return gin.H{"id": id, "match_status": status, "difference": nilIfEmpty(diff), "currency": in.Currency}, nil
+}
+
+func textUsageComparable(provider string, metrics, dimensions map[string]string) bool {
+	if provider != "openai" {
+		return true
+	}
+	if dimensions["batch"] == "true" {
+		return false
+	}
+	for _, key := range []string{"input_audio", "input_cached_audio", "output_audio", "input_image", "input_cached_image", "output_image", "cache_write"} {
+		raw := metrics[key]
+		if raw == "" {
+			continue
+		}
+		value, err := decimal.NewFromString(raw)
+		if err != nil || !value.IsZero() {
+			return false
+		}
+	}
+	value := func(key string, required bool) (decimal.Decimal, bool) {
+		raw := metrics[key]
+		if raw == "" {
+			return decimal.Zero, !required
+		}
+		parsed, err := decimal.NewFromString(raw)
+		return parsed, err == nil && !parsed.IsNegative()
+	}
+	input, inputOK := value("input_total", true)
+	cached, cachedOK := value("input_cached_subset", true)
+	output, outputOK := value("output", true)
+	inputText, inputTextOK := value("input_text", true)
+	cachedText, cachedTextOK := value("input_cached_text", !cached.IsZero())
+	outputText, outputTextOK := value("output_text", true)
+	return inputOK && cachedOK && outputOK && inputTextOK && cachedTextOK && outputTextOK &&
+		inputText.Add(cachedText).Equal(input) && outputText.Equal(output)
 }

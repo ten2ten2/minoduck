@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,14 +22,17 @@ func (s *Server) stripe() *stripe.Client {
 }
 func (s *Server) billingOwner(c *gin.Context, tx pgx.Tx) error {
 	var id string
-	e := tx.QueryRow(c.Request.Context(), `SELECT owner_id FROM billing_accounts WHERE id=$1 FOR UPDATE`, c.GetString("billing_account_id")).Scan(&id)
+	account := c.GetString("billing_account_id")
+	e := tx.QueryRow(c.Request.Context(), `SELECT owner_id FROM billing_accounts WHERE id=$1`, account).Scan(&id)
 	if e != nil {
 		return e
 	}
 	if id != session(c).UserID {
 		return forbidden("OWNER_REQUIRED")
 	}
-	return nil
+	// The command journal can commit independently because this lock does not
+	// conflict with its billing_accounts foreign key.
+	return subscriptions.LockAccount(c.Request.Context(), tx, account)
 }
 func (s *Server) billingURL(c *gin.Context, tx pgx.Tx) string {
 	var slug string
@@ -139,7 +144,7 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	ctx := c.Request.Context()
 	account := c.GetString("billing_account_id")
 	var customer, sub *string
-	e = tx.QueryRow(ctx, `SELECT provider_customer_id,provider_subscription_id FROM subscriptions WHERE billing_account_id=$1 FOR UPDATE`, account).Scan(&customer, &sub)
+	e = tx.QueryRow(ctx, `SELECT provider_customer_id,provider_subscription_id FROM subscriptions WHERE billing_account_id=$1`, account).Scan(&customer, &sub)
 	if e != nil {
 		return nil, e
 	}
@@ -156,27 +161,21 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
 		customer = &out.ID
-		if _, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_customer_id=$1 WHERE billing_account_id=$2`, out.ID, account); e != nil {
-			return nil, e
+		result, persistErr := s.DB.Exec(ctx, `UPDATE subscriptions SET provider_customer_id=$1 WHERE billing_account_id=$2 AND (provider_customer_id IS NULL OR provider_customer_id=$1)`, out.ID, account)
+		if persistErr != nil {
+			return nil, persistErr
+		}
+		if result.RowsAffected() != 1 {
+			return nil, APIError{"BILLING_CUSTOMER_MISMATCH", 409}
 		}
 	}
-	var key, oldPlan, oldInterval string
-	var oldURL *string
-	var expiry time.Time
-	e = tx.QueryRow(ctx, `SELECT request_key,plan_code,billing_interval,url,expires_at FROM checkout_requests WHERE billing_account_id=$1`, account).Scan(&key, &oldPlan, &oldInterval, &oldURL, &expiry)
-	if e != nil && e != pgx.ErrNoRows {
+	key, existingURL, expiry, e := s.beginCheckoutRequest(ctx, account, in.Plan, in.Interval)
+	if e != nil {
 		return nil, e
 	}
-	if e == nil && expiry.After(time.Now()) {
-		if oldPlan != in.Plan || oldInterval != in.Interval {
-			return nil, APIError{"CHECKOUT_ALREADY_PENDING", 409}
-		}
-		if oldURL != nil {
-			return gin.H{"url": *oldURL}, nil
-		}
+	if existingURL != nil {
+		return gin.H{"url": *existingURL}, nil
 	}
-	// Stable across database rollback and retries within the same 30-minute window.
-	key = account + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(time.Now().Unix()/1800, 10)
 	returnURL := s.billingURL(c, tx)
 	out, e := client.V1CheckoutSessions.Create(ctx, &stripe.CheckoutSessionCreateParams{
 		Params: stripe.Params{IdempotencyKey: stripe.String(key)},
@@ -187,13 +186,53 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 			Metadata:    map[string]string{"billing_account_id": account},
 			BillingMode: &stripe.CheckoutSessionCreateSubscriptionDataBillingModeParams{Type: stripe.String("flexible")},
 		},
-		ClientReferenceID: stripe.String(account), ExpiresAt: stripe.Int64((time.Now().Unix()/1800 + 2) * 1800),
+		ClientReferenceID: stripe.String(account), ExpiresAt: stripe.Int64(expiry.Unix()),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
-	_, e = tx.Exec(ctx, `INSERT INTO checkout_requests(billing_account_id,request_key,plan_code,billing_interval,session_id,url,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(billing_account_id) DO UPDATE SET request_key=excluded.request_key,plan_code=excluded.plan_code,billing_interval=excluded.billing_interval,session_id=excluded.session_id,url=excluded.url,expires_at=excluded.expires_at`, account, key, in.Plan, in.Interval, out.ID, out.URL, time.Unix(out.ExpiresAt, 0))
-	return gin.H{"url": out.URL}, e
+	result, e := s.DB.Exec(ctx, `UPDATE checkout_requests SET session_id=$1,url=$2,expires_at=$3 WHERE billing_account_id=$4 AND request_key=$5`, out.ID, out.URL, time.Unix(out.ExpiresAt, 0), account, key)
+	if e != nil {
+		return nil, e
+	}
+	if result.RowsAffected() != 1 {
+		return nil, errors.New("checkout request journal changed")
+	}
+	return gin.H{"url": out.URL}, nil
+}
+
+func (s *Server) beginCheckoutRequest(ctx context.Context, account, plan, interval string) (string, *string, time.Time, error) {
+	journal, err := s.DB.Begin(ctx)
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
+	defer journal.Rollback(ctx)
+	var key, oldPlan, oldInterval string
+	var oldURL *string
+	var expiry time.Time
+	err = journal.QueryRow(ctx, `SELECT request_key,plan_code,billing_interval,url,expires_at FROM checkout_requests WHERE billing_account_id=$1 FOR UPDATE`, account).Scan(&key, &oldPlan, &oldInterval, &oldURL, &expiry)
+	if err != nil && err != pgx.ErrNoRows {
+		return "", nil, time.Time{}, err
+	}
+	if err == nil && expiry.After(time.Now()) {
+		if oldPlan != plan || oldInterval != interval {
+			return "", nil, time.Time{}, APIError{"CHECKOUT_ALREADY_PENDING", 409}
+		}
+		if err = journal.Commit(ctx); err != nil {
+			return "", nil, time.Time{}, err
+		}
+		return key, oldURL, expiry, nil
+	}
+	key = "checkout-" + uuid.NewString()
+	expiry = time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	_, err = journal.Exec(ctx, `INSERT INTO checkout_requests(billing_account_id,request_key,plan_code,billing_interval,expires_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(billing_account_id) DO UPDATE SET request_key=excluded.request_key,plan_code=excluded.plan_code,billing_interval=excluded.billing_interval,session_id=NULL,url=NULL,expires_at=excluded.expires_at`, account, key, plan, interval, expiry)
+	if err != nil {
+		return "", nil, time.Time{}, err
+	}
+	if err = journal.Commit(ctx); err != nil {
+		return "", nil, time.Time{}, err
+	}
+	return key, nil, expiry, nil
 }
 func (s *Server) portal(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := s.billingOwner(c, tx); e != nil {
@@ -258,10 +297,13 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		}
 		return gin.H{"status": "schedule_canceled"}, nil
 	}
-	key := "change-" + *sid + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(item.CurrentPeriodStart, 10)
+	commandID, key, e := s.beginBillingCommand(c.Request.Context(), c.GetString("billing_account_id"), "change", *sid+":"+strconv.FormatInt(item.CurrentPeriodStart, 10)+":"+in.Plan+":"+in.Interval)
+	if e != nil {
+		return nil, e
+	}
 	if mode == "deferred" {
 		if live.CancelAtPeriodEnd {
-			if e = clearPendingCancellation(c.Request.Context(), client, *sid); e != nil {
+			if e = clearPendingCancellation(c.Request.Context(), client, *sid, key+"-resume"); e != nil {
 				return nil, e
 			}
 		}
@@ -280,6 +322,10 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		if _, e = client.V1SubscriptionSchedules.Update(c.Request.Context(), scheduleID, scheduleParams(item, price, in.Interval, key+"-phases")); e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
+		result, _ := json.Marshal(gin.H{"target_plan": in.Plan, "target_interval": in.Interval, "effective_at": item.CurrentPeriodEnd})
+		if _, e = tx.Exec(c.Request.Context(), `UPDATE billing_commands SET state='submitted',provider_object_id=$1,result=$2,updated_at=now() WHERE billing_account_id=$3 AND id=$4`, scheduleID, result, c.GetString("billing_account_id"), commandID); e != nil {
+			return nil, e
+		}
 		_, e = tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=$1,scheduled_interval=$2,provider_schedule_id=$3 WHERE billing_account_id=$4`, in.Plan, in.Interval, scheduleID, c.GetString("billing_account_id"))
 		return gin.H{"status": "scheduled", "effective_at": time.Unix(item.CurrentPeriodEnd, 0)}, e
 	}
@@ -297,16 +343,42 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if oldInterval != in.Interval {
 		params.BillingCycleAnchorNow = stripe.Bool(true)
 	}
-	if _, e = client.V1Subscriptions.Update(c.Request.Context(), *sid, params); e != nil {
+	updated, e := client.V1Subscriptions.Update(c.Request.Context(), *sid, params)
+	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
-	return gin.H{"status": "awaiting_webhook"}, nil
+	state := "submitted"
+	response := gin.H{"status": "awaiting_webhook"}
+	result := gin.H{"target_plan": in.Plan, "target_interval": in.Interval}
+	if updated.PendingUpdate != nil {
+		state = "requires_action"
+		response["status"] = "requires_action"
+		if updated.LatestInvoice != nil && updated.LatestInvoice.ID != "" {
+			invoice, invoiceErr := client.V1Invoices.Retrieve(c.Request.Context(), updated.LatestInvoice.ID, nil)
+			if invoiceErr == nil && invoice.HostedInvoiceURL != "" {
+				response["action_url"] = invoice.HostedInvoiceURL
+				result["action_url"] = invoice.HostedInvoiceURL
+			}
+			result["invoice_id"] = updated.LatestInvoice.ID
+		}
+		if response["action_url"] == nil {
+			return nil, APIError{"PAYMENT_ACTION_UNAVAILABLE", 503}
+		}
+	}
+	encoded, _ := json.Marshal(result)
+	if _, e = tx.Exec(c.Request.Context(), `UPDATE billing_commands SET state=$1,provider_object_id=$2,result=$3,updated_at=now() WHERE billing_account_id=$4 AND id=$5`, state, *sid, encoded, c.GetString("billing_account_id"), commandID); e != nil {
+		return nil, e
+	}
+	return response, nil
 }
 func (s *Server) releaseScheduledChange(c *gin.Context, tx pgx.Tx, client *stripe.Client, scheduleID string) error {
 	if _, e := client.V1SubscriptionSchedules.Release(c.Request.Context(), scheduleID, &stripe.SubscriptionScheduleReleaseParams{
 		Params: stripe.Params{IdempotencyKey: stripe.String("release-" + scheduleID)},
 	}); e != nil {
 		return APIError{"STRIPE_UNAVAILABLE", 503}
+	}
+	if _, e := tx.Exec(c.Request.Context(), `UPDATE billing_commands SET state='canceled',updated_at=now() WHERE billing_account_id=$1 AND provider_object_id=$2 AND state IN ('pending','requires_action','submitted')`, c.GetString("billing_account_id"), scheduleID); e != nil {
+		return e
 	}
 	_, e := tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=NULL,scheduled_interval=NULL,provider_schedule_id=NULL WHERE billing_account_id=$1`, c.GetString("billing_account_id"))
 	return e
@@ -329,19 +401,49 @@ func (s *Server) cancelSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
 	if live.Schedule != nil {
-		if _, e = client.V1SubscriptionSchedules.Release(c.Request.Context(), live.Schedule.ID, &stripe.SubscriptionScheduleReleaseParams{
-			Params: stripe.Params{IdempotencyKey: stripe.String("release-" + live.Schedule.ID)},
-		}); e != nil {
-			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
+		if e = s.releaseScheduledChange(c, tx, client, live.Schedule.ID); e != nil {
+			return nil, e
 		}
 	}
+	commandID, key, e := s.beginBillingCommand(c.Request.Context(), c.GetString("billing_account_id"), "cancel", *id)
+	if e != nil {
+		return nil, e
+	}
 	_, e = client.V1Subscriptions.Update(c.Request.Context(), *id, &stripe.SubscriptionUpdateParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String("cancel-" + uuid.NewString())}, CancelAtPeriodEnd: stripe.Bool(true),
+		Params: stripe.Params{IdempotencyKey: stripe.String(key)}, CancelAtPeriodEnd: stripe.Bool(true),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
+	result, _ := json.Marshal(gin.H{"cancel_at_period_end": true})
+	if _, e = tx.Exec(c.Request.Context(), `UPDATE billing_commands SET state='submitted',provider_object_id=$1,result=$2,updated_at=now() WHERE billing_account_id=$3 AND id=$4`, *id, result, c.GetString("billing_account_id"), commandID); e != nil {
+		return nil, e
+	}
 	return gin.H{"status": "awaiting_webhook"}, nil
+}
+
+func (s *Server) beginBillingCommand(ctx context.Context, account, kind, fingerprint string) (string, string, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx)
+	var id, key string
+	err = tx.QueryRow(ctx, `SELECT id,idempotency_key FROM billing_commands WHERE billing_account_id=$1 AND command_type=$2 AND fingerprint=$3 AND state IN ('pending','requires_action','submitted') ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, account, kind, fingerprint).Scan(&id, &key)
+	if err == nil {
+		err = tx.Commit(ctx)
+		return id, key, err
+	}
+	if err != pgx.ErrNoRows {
+		return "", "", err
+	}
+	id = uuid.NewString()
+	key = "billing-" + kind + "-" + id
+	if _, err = tx.Exec(ctx, `INSERT INTO billing_commands(id,billing_account_id,command_type,fingerprint,idempotency_key) VALUES($1,$2,$3,$4,$5)`, id, account, kind, fingerprint, key); err != nil {
+		return "", "", err
+	}
+	err = tx.Commit(ctx)
+	return id, key, err
 }
 func (s *Server) mapPrice(id string) (string, string) {
 	for key, v := range s.Config.Prices {
@@ -434,6 +536,36 @@ func stripeEventSubject(event stripe.Event) (customerID, subscriptionID string, 
 	return
 }
 
+func stripeEventSubscription(event stripe.Event) *stripe.Subscription {
+	if event.Data == nil {
+		return nil
+	}
+	switch event.Type {
+	case stripe.EventTypeCustomerSubscriptionCreated, stripe.EventTypeCustomerSubscriptionUpdated, stripe.EventTypeCustomerSubscriptionDeleted:
+		var subscription stripe.Subscription
+		if json.Unmarshal(event.Data.Raw, &subscription) == nil && subscription.ID != "" {
+			return &subscription
+		}
+	}
+	return nil
+}
+
+func terminalSubscription(status stripe.SubscriptionStatus) bool {
+	return status == stripe.SubscriptionStatusCanceled || status == stripe.SubscriptionStatusIncompleteExpired
+}
+
+func (s *Server) registerBillingEvent(ctx context.Context, event stripe.Event) (string, error) {
+	var outcome string
+	err := s.DB.QueryRow(ctx, `INSERT INTO billing_events(provider_event_id,event_type,outcome) VALUES($1,$2,'received') ON CONFLICT(provider,provider_event_id) DO UPDATE SET attempts=billing_events.attempts+1,updated_at=now() RETURNING outcome`, event.ID, event.Type).Scan(&outcome)
+	return outcome, err
+}
+
+func (s *Server) markBillingEvent(ctx context.Context, eventID, outcome, code string) {
+	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.DB.Exec(cleanup, `UPDATE billing_events SET outcome=$1,last_error=nullif($2,''),updated_at=now(),processed_at=CASE WHEN $1 IN ('processed','ignored','quarantined') THEN now() ELSE processed_at END WHERE provider='stripe' AND provider_event_id=$3 AND ($1<>'failed' OR outcome NOT IN ('processed','ignored','quarantined'))`, outcome, code, eventID)
+}
+
 func (s *Server) stripeWebhook(c *gin.Context) {
 	body, e := io.ReadAll(io.LimitReader(c.Request.Body, 1024*1024+1))
 	if e != nil || len(body) > 1024*1024 {
@@ -454,8 +586,23 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 		s.fail(c, bad("INVALID_WEBHOOK"))
 		return
 	}
+	outcome, e := s.registerBillingEvent(c.Request.Context(), event)
+	if e != nil {
+		s.fail(c, e)
+		return
+	}
+	if outcome == "processed" || outcome == "ignored" || outcome == "quarantined" {
+		c.JSON(200, gin.H{"status": "duplicate"})
+		return
+	}
 	if sid == "" {
+		s.markBillingEvent(c.Request.Context(), event.ID, "ignored", "")
 		c.JSON(200, gin.H{"status": "ignored"})
+		return
+	}
+	if customerID == "" {
+		s.markBillingEvent(c.Request.Context(), event.ID, "quarantined", "MISSING_CUSTOMER")
+		c.JSON(200, gin.H{"status": "quarantined"})
 		return
 	}
 	ctx := c.Request.Context()
@@ -465,105 +612,184 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	var account string
-	e = tx.QueryRow(ctx, `SELECT billing_account_id FROM subscriptions WHERE provider_customer_id=$1 FOR UPDATE`, customerID).Scan(&account)
-	if e == pgx.ErrNoRows {
-		s.fail(c, APIError{"BILLING_CUSTOMER_PENDING", 503})
+	fail := func(err error) {
+		_ = tx.Rollback(ctx)
+		code := "INTERNAL_ERROR"
+		var known APIError
+		if errors.As(err, &known) {
+			code = known.Code
+		}
+		s.markBillingEvent(ctx, event.ID, "failed", code)
+		s.fail(c, err)
+	}
+	quarantine := func(code string) {
+		_ = tx.Rollback(ctx)
+		s.markBillingEvent(ctx, event.ID, "quarantined", code)
+		c.JSON(200, gin.H{"status": "quarantined"})
+	}
+	var lockedOutcome string
+	if e = tx.QueryRow(ctx, `SELECT outcome FROM billing_events WHERE provider='stripe' AND provider_event_id=$1 FOR UPDATE`, event.ID).Scan(&lockedOutcome); e != nil {
+		fail(e)
 		return
 	}
-	if e != nil {
-		s.fail(c, e)
-		return
-	}
-	var processed bool
-	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_events WHERE provider='stripe' AND provider_event_id=$1)`, event.ID).Scan(&processed)
-	if e != nil {
-		s.fail(c, e)
-		return
-	}
-	if processed {
+	if lockedOutcome == "processed" || lockedOutcome == "ignored" || lockedOutcome == "quarantined" {
 		c.JSON(200, gin.H{"status": "duplicate"})
 		return
 	}
-	// Read Stripe *after* acquiring the account lock. Event delivery order is irrelevant.
-	client := s.stripe()
-	live, e := client.V1Subscriptions.Retrieve(ctx, sid, nil)
-	if e != nil {
-		s.fail(c, APIError{"STRIPE_UNAVAILABLE", 503})
+	var account string
+	e = tx.QueryRow(ctx, `SELECT billing_account_id FROM subscriptions WHERE provider_customer_id=$1`, customerID).Scan(&account)
+	if e == pgx.ErrNoRows {
+		fail(APIError{"BILLING_CUSTOMER_PENDING", 503})
 		return
 	}
-	item := subscriptionItem(live)
-	if live.Customer == nil || live.Customer.ID != customerID || live.Metadata["billing_account_id"] != account || item == nil {
-		s.fail(c, bad("SUBSCRIPTION_SCOPE_MISMATCH"))
+	if e != nil {
+		fail(e)
+		return
+	}
+	if e = subscriptions.LockAccount(ctx, tx, account); e != nil {
+		fail(e)
 		return
 	}
 	var current *string
-	e = tx.QueryRow(ctx, `SELECT provider_subscription_id FROM subscriptions WHERE billing_account_id=$1`, account).Scan(&current)
+	e = tx.QueryRow(ctx, `SELECT provider_subscription_id FROM subscriptions WHERE billing_account_id=$1 AND provider_customer_id=$2 FOR UPDATE`, account, customerID).Scan(&current)
 	if e != nil {
-		s.fail(c, e)
+		fail(e)
+		return
+	}
+	embedded := stripeEventSubscription(event)
+	client := s.stripe()
+	live, retrieveErr := client.V1Subscriptions.Retrieve(ctx, sid, nil)
+	if retrieveErr != nil {
+		if embedded == nil || !terminalSubscription(embedded.Status) {
+			fail(APIError{"STRIPE_UNAVAILABLE", 503})
+			return
+		}
+		live = embedded
+	}
+	if live.Customer == nil || live.Customer.ID != customerID {
+		quarantine("SUBSCRIPTION_SCOPE_MISMATCH")
 		return
 	}
 	// An old canceled subscription cannot revoke a replacement subscription.
 	if current != nil && *current != sid {
-		if live.Status == "canceled" || live.Status == "incomplete_expired" {
+		if terminalSubscription(live.Status) {
+			if _, e = tx.Exec(ctx, `UPDATE billing_events SET outcome='ignored',last_error=NULL,updated_at=now(),processed_at=now() WHERE provider='stripe' AND provider_event_id=$1`, event.ID); e != nil {
+				fail(e)
+				return
+			}
+			if e = tx.Commit(ctx); e != nil {
+				fail(e)
+				return
+			}
 			c.JSON(200, gin.H{"status": "obsolete"})
 			return
 		}
-		s.fail(c, APIError{"DUPLICATE_SUBSCRIPTION_REVIEW", 409})
+		quarantine("DUPLICATE_SUBSCRIPTION_REVIEW")
+		return
+	}
+	if terminalSubscription(live.Status) {
+		// Terminal objects may no longer contain items, metadata or a recognized
+		// price. Revoke first, using the already verified customer/subscription
+		// relationship, so malformed terminal expansion cannot preserve access.
+		if current == nil {
+			if _, e = tx.Exec(ctx, `UPDATE billing_events SET outcome='ignored',last_error=NULL,updated_at=now(),processed_at=now() WHERE provider='stripe' AND provider_event_id=$1`, event.ID); e != nil {
+				fail(e)
+				return
+			}
+		} else {
+			if _, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_subscription_id=NULL,plan_code='free',billing_interval=NULL,status=$1,current_period_start=NULL,current_period_end=NULL,cancel_at_period_end=false,grace_period_until=NULL,grace_invoice_id=NULL,scheduled_plan=NULL,scheduled_interval=NULL,provider_schedule_id=NULL,retention_grace_until=now()+interval '30 days',updated_at=now() WHERE billing_account_id=$2`, live.Status, account); e != nil {
+				fail(e)
+				return
+			}
+			if e = subscriptions.ApplyEntitlements(ctx, tx, account, subscriptions.Plans["free"]); e != nil {
+				fail(e)
+				return
+			}
+			if _, e = tx.Exec(ctx, `UPDATE billing_commands SET state=CASE WHEN command_type='cancel' THEN 'succeeded' ELSE 'canceled' END,updated_at=now() WHERE billing_account_id=$1 AND (provider_object_id=$2 OR provider_object_id IS NULL AND (fingerprint=$2 OR fingerprint LIKE $2||':%')) AND state IN ('pending','requires_action','submitted')`, account, sid); e != nil {
+				fail(e)
+				return
+			}
+			if _, e = tx.Exec(ctx, `UPDATE billing_events SET outcome='processed',last_error=NULL,updated_at=now(),processed_at=now() WHERE provider='stripe' AND provider_event_id=$1`, event.ID); e != nil {
+				fail(e)
+				return
+			}
+		}
+		if _, e = tx.Exec(ctx, `DELETE FROM checkout_requests WHERE billing_account_id=$1`, account); e != nil {
+			fail(e)
+			return
+		}
+		if e = tx.Commit(ctx); e != nil {
+			fail(e)
+			return
+		}
+		c.JSON(200, gin.H{"status": "processed"})
+		return
+	}
+	item := subscriptionItem(live)
+	if live.Metadata["billing_account_id"] != account || item == nil || item.CurrentPeriodEnd <= item.CurrentPeriodStart {
+		quarantine("SUBSCRIPTION_SCOPE_MISMATCH")
 		return
 	}
 	plan, interval := s.mapPrice(item.Price.ID)
 	if plan == "" {
-		s.fail(c, bad("UNRECOGNIZED_PRICE"))
+		quarantine("UNRECOGNIZED_PRICE")
 		return
 	}
 	var grace *time.Time
-	e = tx.QueryRow(ctx, `SELECT grace_period_until FROM subscriptions WHERE billing_account_id=$1`, account).Scan(&grace)
+	var graceInvoice *string
+	e = tx.QueryRow(ctx, `SELECT grace_period_until,grace_invoice_id FROM subscriptions WHERE billing_account_id=$1`, account).Scan(&grace, &graceInvoice)
 	if e != nil {
-		s.fail(c, e)
+		fail(e)
 		return
 	}
-	if live.Status == "past_due" && grace == nil {
+	if live.Status == stripe.SubscriptionStatusPastDue && (grace == nil || live.LatestInvoice == nil || graceInvoice == nil || *graceInvoice != live.LatestInvoice.ID) {
 		// Derive from Stripe's current invoice rather than delayed webhook arrival.
 		if live.LatestInvoice == nil || live.LatestInvoice.ID == "" {
-			s.fail(c, APIError{"INVOICE_STATE_PENDING", 503})
+			fail(APIError{"INVOICE_STATE_PENDING", 503})
 			return
 		}
 		inv, e := client.V1Invoices.Retrieve(ctx, live.LatestInvoice.ID, nil)
 		if e != nil {
-			s.fail(c, APIError{"STRIPE_UNAVAILABLE", 503})
+			fail(APIError{"STRIPE_UNAVAILABLE", 503})
 			return
 		}
 		until := time.Unix(inv.Created, 0).Add(7 * 24 * time.Hour)
 		grace = &until
+		invoiceID := live.LatestInvoice.ID
+		graceInvoice = &invoiceID
 	}
-	if live.Status != "past_due" {
+	if live.Status != stripe.SubscriptionStatusPastDue {
 		grace = nil
-	}
-	var persistSID any = sid
-	if live.Status == "canceled" || live.Status == "incomplete_expired" {
-		plan = "free"
-		persistSID = nil
+		graceInvoice = nil
 	}
 	var scheduleID *string
 	if live.Schedule != nil {
 		scheduleID = &live.Schedule.ID
 	}
-	_, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_subscription_id=$1,plan_code=$2,billing_interval=$3,status=$4,current_period_start=$5,current_period_end=$6,cancel_at_period_end=$7,grace_period_until=$8,scheduled_plan=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_plan END,scheduled_interval=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $9::text IS NULL THEN NULL ELSE scheduled_interval END,provider_schedule_id=$9,retention_grace_until=CASE WHEN plan_code='team' AND $2 IN ('starter','free') OR plan_code='starter' AND $2='free' THEN now()+interval '30 days' ELSE retention_grace_until END,updated_at=now() WHERE billing_account_id=$10`, persistSID, plan, interval, live.Status, time.Unix(item.CurrentPeriodStart, 0), time.Unix(item.CurrentPeriodEnd, 0), live.CancelAtPeriodEnd, grace, scheduleID, account)
+	_, e = tx.Exec(ctx, `UPDATE subscriptions SET provider_subscription_id=$1,plan_code=$2,billing_interval=$3,status=$4,current_period_start=$5,current_period_end=$6,cancel_at_period_end=$7,grace_period_until=$8,grace_invoice_id=$9,scheduled_plan=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $10::text IS NULL THEN NULL ELSE scheduled_plan END,scheduled_interval=CASE WHEN scheduled_plan=$2 AND scheduled_interval=$3 OR $10::text IS NULL THEN NULL ELSE scheduled_interval END,provider_schedule_id=$10,retention_grace_until=CASE WHEN plan_code='team' AND $2 IN ('starter','free') OR plan_code='starter' AND $2='free' THEN now()+interval '30 days' ELSE retention_grace_until END,updated_at=now() WHERE billing_account_id=$11`, sid, plan, interval, live.Status, time.Unix(item.CurrentPeriodStart, 0), time.Unix(item.CurrentPeriodEnd, 0), live.CancelAtPeriodEnd, grace, graceInvoice, scheduleID, account)
 	if e != nil {
-		s.fail(c, e)
+		fail(e)
 		return
 	}
-	if _, e = tx.Exec(ctx, `INSERT INTO billing_events(provider_event_id,event_type) VALUES($1,$2)`, event.ID, event.Type); e != nil {
-		s.fail(c, e)
+	effective := subscriptions.Effective(plan, string(live.Status), grace, time.Now())
+	if e = subscriptions.ApplyEntitlements(ctx, tx, account, effective); e != nil {
+		fail(e)
+		return
+	}
+	if _, e = tx.Exec(ctx, `UPDATE billing_commands SET state=CASE WHEN command_type='change' AND (result->>'target_plan'=$2 AND result->>'target_interval'=$3 OR provider_object_id IS NULL AND fingerprint LIKE $5||':%:'||$2||':'||$3) THEN 'succeeded' WHEN command_type='cancel' AND $4 THEN 'succeeded' WHEN command_type='resume' AND NOT $4 THEN 'succeeded' ELSE state END,updated_at=now() WHERE billing_account_id=$1 AND (provider_object_id=$5 OR provider_object_id=$6 OR provider_object_id IS NULL AND ((command_type IN ('cancel','resume') AND fingerprint=$5) OR command_type='change' AND fingerprint LIKE $5||':%:'||$2||':'||$3)) AND state IN ('pending','requires_action','submitted')`, account, plan, interval, live.CancelAtPeriodEnd, sid, scheduleID); e != nil {
+		fail(e)
+		return
+	}
+	if _, e = tx.Exec(ctx, `UPDATE billing_events SET outcome='processed',last_error=NULL,updated_at=now(),processed_at=now() WHERE provider='stripe' AND provider_event_id=$1`, event.ID); e != nil {
+		fail(e)
 		return
 	}
 	if _, e = tx.Exec(ctx, `DELETE FROM checkout_requests WHERE billing_account_id=$1`, account); e != nil {
-		s.fail(c, e)
+		fail(e)
 		return
 	}
 	if e = tx.Commit(ctx); e != nil {
-		s.fail(c, e)
+		fail(e)
 		return
 	}
 	c.JSON(200, gin.H{"status": "processed"})

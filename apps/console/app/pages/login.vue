@@ -11,17 +11,21 @@ const sent = ref(false),
   busy = ref(false)
 const token = ref(String(route.query.token ?? ''))
 if (import.meta.client && (token.value || route.query.ui_locale !== undefined)) {
+  if (token.value) sessionStorage.setItem('md_login_token', token.value)
   const query = { ...route.query }
   delete query.token
   delete query.ui_locale
-  await navigateTo({ path: '/login', query }, { replace: true })
+  const search = new URLSearchParams(query as Record<string, string>).toString()
+  window.history.replaceState(window.history.state, '', `/login${search ? `?${search}` : ''}`)
+} else if (import.meta.client) {
+  token.value = sessionStorage.getItem('md_login_token') ?? ''
 }
 if (user.value && !token.value) await navigateTo('/onboarding', { replace: true })
 async function send() {
   busy.value = true
   error.value = ''
   try {
-    const result = await api('/auth/email/start', {
+    const result = await api<ApiAction>('/auth/email/start', {
       method: 'POST',
       body: { email: email.value, locale: locale.value },
     })
@@ -46,6 +50,7 @@ async function verify() {
     busy.value = false
   }
   token.value = ''
+  sessionStorage.removeItem('md_login_token')
   await navigateTo('/onboarding')
 }
 </script>

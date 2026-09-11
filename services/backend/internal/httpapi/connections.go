@@ -12,14 +12,14 @@ import (
 
 func providerCapabilities() any {
 	return []gin.H{
-		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.openaiWarning", "l1_native_cost_comparable": false, "native": true},
-		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "l1_native_cost_comparable": false, "l1_pricing_dimensions": []string{"model", "service_tier", "inference_geo", "speed"}, "native": true},
-		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": "2026-09-11.1", "warning_key": "providers.openrouterWarning", "l1_native_cost_comparable": false, "native": true},
+		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.openaiWarning", "l1_native_cost_comparable": false, "native": true},
+		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "organization", "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "l1_native_cost_comparable": false, "l1_pricing_dimensions": []string{"model", "service_tier", "inference_geo", "speed"}, "native": true},
+		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "workspace", "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.openrouterWarning", "l1_native_cost_comparable": false, "native": true},
 		{"id": "csv", "name": "CSV", "credential_kind": "none", "supports_usage": false, "supports_cost": true, "supports_invoice": true, "supports_account_identity_validation": false, "warning_key": "providers.csvWarning", "native": false},
 	}
 }
 
-const connectionJSON = `json_build_object('id',a.id,'provider',a.provider,'name',a.name,'external_account_ref',a.external_account_ref,'status',a.status,'credential_suffix',a.credential_suffix,'data_through',a.data_through,'last_sync_at',a.last_sync_at,'next_sync_at',a.next_sync_at,'error_code',a.error_code,'identity_verified',false)`
+const connectionJSON = `json_build_object('id',a.id,'provider',a.provider,'name',a.name,'external_account_ref',a.external_account_ref,'provider_identity',a.provider_identity,'provider_scope',a.provider_scope,'status',a.status,'credential_suffix',a.credential_suffix,'data_through',a.data_through,'last_sync_at',a.last_sync_at,'next_sync_at',a.next_sync_at,'error_code',a.error_code,'identity_verified',a.identity_verified,'identity_verified_at',a.identity_verified_at,'billing_suspended',a.billing_suspended)`
 
 func (s *Server) connections(c *gin.Context, tx pgx.Tx) (any, error) {
 	return platform.JSONRows(c.Request.Context(), tx, `SELECT `+connectionJSON+` FROM provider_accounts a WHERE workspace_id=$1 ORDER BY created_at,id`, c.Param("wid"))
@@ -125,7 +125,7 @@ func (s *Server) replaceCredential(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, APIError{"ENCRYPTION_NOT_CONFIGURED", 503}
 	}
-	if _, e = tx.Exec(c.Request.Context(), `UPDATE provider_accounts SET credential_cipher=$1,credential_key_id=$2,credential_suffix=$3,generation=generation+1,status='validating',error_code=NULL,next_sync_at=now() WHERE workspace_id=$4 AND id=$5`, encrypted, s.Config.KeyID, in.Credential[len(in.Credential)-4:], c.Param("wid"), c.Param("cid")); e != nil {
+	if _, e = tx.Exec(c.Request.Context(), `UPDATE provider_accounts SET credential_cipher=$1,credential_key_id=$2,credential_suffix=$3,generation=generation+1,status='validating',identity_verified=false,identity_verified_at=NULL,error_code=NULL,next_sync_at=now() WHERE workspace_id=$4 AND id=$5`, encrypted, s.Config.KeyID, in.Credential[len(in.Credential)-4:], c.Param("wid"), c.Param("cid")); e != nil {
 		return nil, e
 	}
 	if _, e = tx.Exec(c.Request.Context(), `UPDATE sync_runs SET state='canceled' WHERE workspace_id=$1 AND account_id=$2 AND state IN ('pending','running')`, c.Param("wid"), c.Param("cid")); e != nil {

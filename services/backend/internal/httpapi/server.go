@@ -54,7 +54,13 @@ func (s *Server) Router() *gin.Engine {
 		if s.Config.Env == "production" {
 			c.Header("Strict-Transport-Security", "max-age=31536000")
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 21*1024*1024)
+		limit := int64(64 * 1024)
+		if strings.Contains(c.Request.URL.Path, "/imports") {
+			limit = 21 * 1024 * 1024
+		} else if c.Request.URL.Path == "/api/v1/webhooks/stripe" {
+			limit = 1024 * 1024
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		c.Next()
 	})
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
@@ -163,8 +169,13 @@ func (s *Server) authenticate(c *gin.Context) {
 	a := Session{Hash: platform.TokenHash(token)}
 	record, e := dbgen.New(s.DB).SessionUser(c.Request.Context(), a.Hash)
 	a.UserID, a.Email, a.Locale, a.Theme, a.CSRF, a.LocaleExplicit = record.ID, record.Email, record.Locale, record.Theme, record.CsrfToken, record.LocaleExplicit
-	if e != nil {
+	if errors.Is(e, pgx.ErrNoRows) {
 		s.fail(c, APIError{"UNAUTHORIZED", 401})
+		c.Abort()
+		return
+	}
+	if e != nil {
+		s.fail(c, e)
 		c.Abort()
 		return
 	}
@@ -217,8 +228,12 @@ func (s *Server) tenant(role string, h tenantHandler) gin.HandlerFunc {
 		defer tx.Rollback(c.Request.Context())
 		membership, e := dbgen.New(tx).TenantMembership(c.Request.Context(), dbgen.TenantMembershipParams{WorkspaceID: wid, UserID: session(c).UserID})
 		actual, account := membership.Role, membership.BillingAccountID
-		if e != nil {
+		if errors.Is(e, pgx.ErrNoRows) {
 			s.fail(c, APIError{"NOT_FOUND", 404})
+			return
+		}
+		if e != nil {
+			s.fail(c, e)
 			return
 		}
 		ranks := map[string]int{"viewer": 1, "admin": 2, "owner": 3}
@@ -228,10 +243,59 @@ func (s *Server) tenant(role string, h tenantHandler) gin.HandlerFunc {
 		}
 		c.Set("role", actual)
 		c.Set("billing_account_id", account)
+		mutation := c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead
+		var effectivePlan subscriptions.Plan
+		if mutation {
+			if e = s.lockAccount(c, tx); e != nil {
+				s.fail(c, e)
+				return
+			}
+			effectivePlan, e = s.plan(c, tx)
+			if e != nil {
+				s.fail(c, e)
+				return
+			}
+			// Refresh time-sensitive entitlements before authorizing the mutation;
+			// otherwise the first request after a grace period expires could write
+			// through stale suspension flags.
+			if e = subscriptions.ApplyEntitlements(c.Request.Context(), tx, account, effectivePlan); e != nil {
+				s.fail(c, e)
+				return
+			}
+			// Membership, deletion and suspension can change while this request is
+			// waiting for the account lock. Revalidate after acquiring it.
+			membership, e = dbgen.New(tx).TenantMembership(c.Request.Context(), dbgen.TenantMembershipParams{WorkspaceID: wid, UserID: session(c).UserID})
+			if errors.Is(e, pgx.ErrNoRows) || (e == nil && membership.BillingAccountID != account) {
+				s.fail(c, APIError{"NOT_FOUND", 404})
+				return
+			}
+			if e != nil {
+				s.fail(c, e)
+				return
+			}
+			actual = membership.Role
+			if ranks[actual] < ranks[role] {
+				s.fail(c, forbidden("INSUFFICIENT_ROLE"))
+				return
+			}
+			c.Set("role", actual)
+		}
+		c.Set("billing_suspended", membership.BillingSuspended)
+		cleanupRoute := c.Request.Method == http.MethodDelete && (strings.HasSuffix(c.FullPath(), "/connections/:cid") || strings.HasSuffix(c.FullPath(), "/members/:memberId") || strings.HasSuffix(c.FullPath(), "/alert-rules/:aid"))
+		if membership.BillingSuspended && mutation && !strings.Contains(c.FullPath(), "/subscription/") && !strings.HasSuffix(c.FullPath(), "/deletion-requests") && !cleanupRoute {
+			s.fail(c, APIError{"WORKSPACE_SUSPENDED", 402})
+			return
+		}
 		result, e := h(c, tx)
 		if e != nil {
 			s.fail(c, e)
 			return
+		}
+		if mutation {
+			if e = subscriptions.ApplyEntitlements(c.Request.Context(), tx, account, effectivePlan); e != nil {
+				s.fail(c, e)
+				return
+			}
 		}
 		if e = tx.Commit(c.Request.Context()); e != nil {
 			s.fail(c, e)

@@ -3,9 +3,9 @@ package ledger
 import (
 	"context"
 	"encoding/json"
-	"github.com/jackc/pgx/v5"
-	"maps"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // CompleteScope verifies the union of complete source windows, including native
@@ -30,36 +30,22 @@ func CompleteUsage(ctx context.Context, tx pgx.Tx, wid, account string, start, e
 
 // Publish runs under an account row lock in the caller's tenant transaction.
 func Publish(ctx context.Context, tx pgx.Tx, wid, account, batch string, entries []Entry) (int, error) {
-	changed := 0
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS publish_stage (
+ row_number integer NOT NULL, source_record_key text NOT NULL, source_record_ref text NOT NULL,
+ period_start timestamptz NOT NULL, period_end timestamptz NOT NULL, source_timezone text NOT NULL,
+ billing_provider text NOT NULL, model_vendor text NOT NULL, raw_model_name text NOT NULL,
+ charge_category text NOT NULL, cost_kind text NOT NULL, source_scope text NOT NULL,
+ provider_project_ref text NOT NULL, amount numeric(30,12) NOT NULL, currency char(3) NOT NULL,
+ coverage_status text NOT NULL, dimensions jsonb NOT NULL
+) ON COMMIT DROP; TRUNCATE pg_temp.publish_stage`); err != nil {
+		return 0, err
+	}
+	rows := make([][]any, 0, len(entries))
 	for i, v := range entries {
-		var oldID, amount, coverage, timezone, provider, vendor, model, category, kind, scope, project, currency string
-		var oldStart, oldEnd time.Time
-		var dimensions []byte
-		var revision int
-		e := tx.QueryRow(ctx, `SELECT id,amount::text,coverage_status,revision,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,currency::text,dimensions FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND source_record_key=$3 AND is_current FOR UPDATE`, wid, account, v.Key).Scan(&oldID, &amount, &coverage, &revision, &oldStart, &oldEnd, &timezone, &provider, &vendor, &model, &category, &kind, &scope, &project, &currency, &dimensions)
-		if e != nil && e != pgx.ErrNoRows {
-			return 0, e
-		}
-		if e == pgx.ErrNoRows {
-			if e = tx.QueryRow(ctx, `SELECT coalesce(max(revision),0) FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND source_record_key=$3`, wid, account, v.Key).Scan(&revision); e != nil {
-				return 0, e
-			}
-		}
-		if oldID != "" {
-			oldAmount, _ := Amount(amount)
-			nextAmount, _ := Amount(v.Amount)
-			oldDimensions := map[string]string{}
-			if e = json.Unmarshal(dimensions, &oldDimensions); e != nil {
-				return 0, e
-			}
-			if oldAmount.Equal(nextAmount) && coverage == v.Coverage && oldStart.Equal(v.Start) && oldEnd.Equal(v.End) && timezone == v.Timezone && provider == v.Provider && vendor == v.Vendor && model == v.Model && category == v.Category && kind == v.Kind && scope == v.Scope && project == v.Project && currency == v.Currency && maps.Equal(oldDimensions, v.Dimensions) {
-				continue
-			}
-			if _, e = tx.Exec(ctx, `UPDATE cost_entries SET is_current=false WHERE workspace_id=$1 AND id=$2`, wid, oldID); e != nil {
-				return 0, e
-			}
-		}
-		dimensions, _ = json.Marshal(v.Dimensions)
+		dimensions, _ := json.Marshal(v.Dimensions)
 		if v.Dimensions == nil {
 			dimensions = []byte(`{}`)
 		}
@@ -67,12 +53,50 @@ func Publish(ctx context.Context, tx pgx.Tx, wid, account, batch string, entries
 		if ref == "" {
 			ref = jsonRef(i)
 		}
-		_, e = tx.Exec(ctx, `INSERT INTO cost_entries(workspace_id,account_id,source_record_key,revision,source_batch_id,source_record_ref,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,amount,currency,coverage_status,dimensions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, wid, account, v.Key, revision+1, batch, ref, v.Start, v.End, v.Timezone, v.Provider, v.Vendor, v.Model, v.Category, v.Kind, v.Scope, v.Project, v.Amount, v.Currency, v.Coverage, dimensions)
-		if e != nil {
-			return 0, e
-		}
-		changed++
+		rows = append(rows, []any{i, v.Key, ref, v.Start, v.End, v.Timezone, v.Provider, v.Vendor, v.Model, v.Category, v.Kind, v.Scope, v.Project, v.Amount, v.Currency, v.Coverage, dimensions})
 	}
-	return changed, nil
+	columns := []string{"row_number", "source_record_key", "source_record_ref", "period_start", "period_end", "source_timezone", "billing_provider", "model_vendor", "raw_model_name", "charge_category", "cost_kind", "source_scope", "provider_project_ref", "amount", "currency", "coverage_status", "dimensions"}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"publish_stage"}, columns, pgx.CopyFromRows(rows)); err != nil {
+		return 0, err
+	}
+	// Materialize candidates before retiring previous revisions. The old current
+	// row must be retired before the partial unique index sees its replacement.
+	// Publish can run more than once in an import/sync transaction, so reset the
+	// transaction-local candidate table between batches.
+	if _, err := tx.Exec(ctx, `DROP TABLE IF EXISTS pg_temp.publish_candidates`); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE publish_candidates ON COMMIT DROP AS
+	 SELECT s.*,c.id AS old_id,coalesce(h.revision,0) AS previous_revision
+ FROM pg_temp.publish_stage s
+ LEFT JOIN cost_entries c ON c.workspace_id=$1 AND c.account_id=$2 AND c.source_record_key=s.source_record_key AND c.is_current
+ LEFT JOIN LATERAL (
+  SELECT max(revision) AS revision FROM cost_entries h
+  WHERE h.workspace_id=$1 AND h.account_id=$2 AND h.source_record_key=s.source_record_key
+ ) h ON true
+ WHERE c.id IS NULL OR c.amount IS DISTINCT FROM s.amount
+  OR c.coverage_status IS DISTINCT FROM s.coverage_status
+  OR c.period_start IS DISTINCT FROM s.period_start OR c.period_end IS DISTINCT FROM s.period_end
+  OR c.source_timezone IS DISTINCT FROM s.source_timezone
+  OR c.billing_provider IS DISTINCT FROM s.billing_provider
+  OR c.model_vendor IS DISTINCT FROM s.model_vendor OR c.raw_model_name IS DISTINCT FROM s.raw_model_name
+  OR c.charge_category IS DISTINCT FROM s.charge_category OR c.cost_kind IS DISTINCT FROM s.cost_kind
+	  OR c.source_scope IS DISTINCT FROM s.source_scope
+	  OR c.provider_project_ref IS DISTINCT FROM s.provider_project_ref
+	  OR c.currency IS DISTINCT FROM s.currency OR c.dimensions IS DISTINCT FROM s.dimensions`, wid, account); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE cost_entries c SET is_current=false FROM pg_temp.publish_candidates n
+	 WHERE n.old_id IS NOT NULL AND c.workspace_id=$1 AND c.id=n.old_id
+	`, wid); err != nil {
+		return 0, err
+	}
+	var changed int
+	err := tx.QueryRow(ctx, `WITH inserted AS (
+	 INSERT INTO cost_entries(workspace_id,account_id,source_record_key,revision,source_batch_id,source_record_ref,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,amount,currency,coverage_status,dimensions)
+	 SELECT $1,$2,source_record_key,previous_revision+1,$3,source_record_ref,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,amount,currency,coverage_status,dimensions
+	 FROM pg_temp.publish_candidates ORDER BY row_number RETURNING 1
+	) SELECT count(*) FROM inserted`, wid, account, batch).Scan(&changed)
+	return changed, err
 }
 func jsonRef(i int) string { b, _ := json.Marshal(i); return "/entries/" + string(b) }

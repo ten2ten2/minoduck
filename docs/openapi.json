@@ -2552,6 +2552,46 @@
           }
         ]
       }
+    },
+    "/api/v1/workspaces/{wid}/subscription/resume": {
+      "post": {
+        "operationId": "resumeSubscription",
+        "summary": "Resume subscription renewal",
+        "responses": {
+          "200": {
+            "description": "Successful response; most report/evidence objects are endpoint-specific."
+          },
+          "default": {
+            "description": "Machine-readable error; 402 plan gate, 403 role/CSRF, 404 hidden/unavailable resource, 409 conflict, 503 retryable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {

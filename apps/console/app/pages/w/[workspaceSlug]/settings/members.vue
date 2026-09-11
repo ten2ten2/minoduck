@@ -3,7 +3,7 @@ const { t } = useI18n()
 const { scoped, workspace, errorText } = useApi()
 const { data, error, refresh } = await useAsyncData(
   () => `members-${workspace.value?.id}`,
-  (_app, { signal }) => scoped<any[]>('/members', { signal }),
+  (_app, { signal }) => scoped<Member[]>('/members', { signal }),
 )
 const open = ref(false),
   email = ref(''),
@@ -12,13 +12,13 @@ const open = ref(false),
   actionError = ref(''),
   message = ref(''),
   devLink = ref('')
-const canRemove = (member: any) =>
+const canRemove = (member: Member) =>
   member.role !== 'owner' && (workspace.value?.role === 'owner' || member.role === 'viewer')
 async function invite() {
   busy.value = true
   actionError.value = ''
   try {
-    const result = await scoped('/invitations', {
+    const result = await scoped<ApiAction>('/invitations', {
       method: 'POST',
       body: { email: email.value, role: role.value },
     })

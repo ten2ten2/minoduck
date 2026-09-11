@@ -2,14 +2,14 @@
 
 ## 原生连接器
 
-| 来源 | 凭据和端点 | Actual | 边界 |
-|---|---|---|---|
-| OpenAI | 组织 Admin Key；`/v1/organization/costs` 与 `/v1/organization/usage/completions` | Costs 返回的原币种金额 | 费用行不虚构模型归属；completion usage 独立保存；Costs 是财务口径，不能假设只含文本 token 费用 |
-| Anthropic | Admin API Key；`/v1/organizations/cost_report`、`usage_report/messages` | cents 精确除以 100 | Console 范围；不代表 Bedrock/Vertex；priority tier 已知不在 Cost API；usage 保存 `service_tier`、`inference_geo`、`speed` 等价格维度 |
-| OpenRouter | Management Key；`/api/v1/activity?date=YYYY-MM-DD` | activity usage | 最近 30 个已完成 UTC 日；BYOK inference 镜像金额不再次加到 Actual |
-| CSV | 用户上传去敏报表 | 用户选择口径 | 通用模板，尚无供应商专属认证模板 |
+| 来源       | 凭据和端点                                                                       | Actual                 | 边界                                                                                                                                 |
+| ---------- | -------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenAI     | 组织 Admin Key；`/v1/organization/costs` 与 `/v1/organization/usage/completions` | Costs 返回的原币种金额 | 费用行不虚构模型归属；completion usage 独立保存；Costs 是财务口径，不能假设只含文本 token 费用                                       |
+| Anthropic  | Admin API Key；先以 `/v1/organizations/me` 验证组织，再读取 cost/usage report    | cents 精确除以 100     | Console 范围；不代表 Bedrock/Vertex；priority tier 已知不在 Cost API；usage 保存 `service_tier`、`inference_geo`、`speed` 等价格维度 |
+| OpenRouter | Management Key；验证 Workspace 后按 `workspace_id` 读取 `/api/v1/activity`       | activity usage         | 最近 30 个已完成 UTC 日；BYOK inference 镜像金额不再次加到 Actual                                                                    |
+| CSV        | 用户上传去敏报表                                                                 | 用户选择口径           | 通用模板，尚无供应商专属认证模板                                                                                                     |
 
-初次同步默认最近 7 个完整日；后续扫描本月和上月已完成日，OpenRouter 截为 30 天。Free 每日，付费两小时一次（OpenRouter 每日）。401/403 终止当前同步并提示更换凭据；429 按 Retry-After 退避并限制次数，5xx 由 River 重试。所有快照是仅含账单字段的规范化证据，不保存推理正文。
+初次同步最近 7 个完整日，之后以 7 日分片向前回补套餐允许的 30/90 天历史；回补完成后滚动刷新最近 14 天，OpenRouter 始终截为 30 天。Free 每日，付费两小时一次（OpenRouter 每日）。401/403 终止当前同步并提示更换凭据；408/409/425、429 与 5xx 有界重试，429 尊重 Retry-After。所有快照是仅含账单字段的规范化证据，不保存推理正文。
 
 Provider JSON 中合法的数字可以使用科学计数法；连接器先用精确十进制解析并规范化为普通十进制字符串，再进入账本的 `numeric(30,12)` 边界。用户 CSV 仍禁止科学计数法，以保证人工报表格式明确、可直接核验。
 

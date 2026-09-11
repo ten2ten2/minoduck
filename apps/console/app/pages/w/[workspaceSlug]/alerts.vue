@@ -4,7 +4,7 @@ const { scoped, workspace, errorText } = useApi()
 const { money } = useMoney()
 const { data, error, refresh } = await useAsyncData(
   () => `alerts-${workspace.value?.id}`,
-  (_app, { signal }) => scoped<any[]>('/alert-rules', { signal }),
+  (_app, { signal }) => scoped<AlertRule[]>('/alert-rules', { signal }),
 )
 const open = ref(false),
   busy = ref(false),
@@ -14,7 +14,7 @@ const form = reactive({ name: '', kind: 'budget', currency: 'USD', amount: '', e
 function resetForm() {
   Object.assign(form, { name: '', kind: 'budget', currency: 'USD', amount: '', enabled: true })
 }
-function edit(rule: any) {
+function edit(rule: AlertRule) {
   editing.value = rule.id
   Object.assign(form, {
     name: rule.name,

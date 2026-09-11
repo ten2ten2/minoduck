@@ -20,6 +20,9 @@ var Plans = map[string]Plan{
 	"free":    {"free", 0, 0, 1, 1, 2, 1, 30, "500", false, false},
 	"starter": {"starter", 29, 290, 1, 3, 5, 5, 180, "5000", true, true},
 	"team":    {"team", 79, 790, 3, 10, 15, 25, 730, "25000", true, true},
+	// Business is provisioned manually. Until per-contract overrides are set,
+	// Team is the conservative entitlement floor; it must never collapse to Free.
+	"business": {"business", 0, 0, 3, 10, 15, 25, 730, "25000", true, true},
 }
 
 func Effective(code, status string, grace *time.Time, now time.Time) Plan {

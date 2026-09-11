@@ -12,6 +12,7 @@ export interface Workspace {
   slug: string
   name: string
   role: 'owner' | 'admin' | 'viewer'
+  billing_suspended?: boolean
 }
 
 export function useSession() {

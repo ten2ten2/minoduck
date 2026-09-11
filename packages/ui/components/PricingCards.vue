@@ -1,5 +1,10 @@
 <script setup lang="ts">
-defineProps<{ busy?: boolean; current?: string; contactEmail?: string }>()
+const props = defineProps<{
+  busy?: boolean
+  current?: string
+  currentInterval?: 'month' | 'year' | null
+  contactEmail?: string
+}>()
 const emit = defineEmits<{ choose: [plan: string, interval: 'month' | 'year'] }>()
 const { t } = useI18n()
 const interval = ref<'month' | 'year'>('month')
@@ -87,12 +92,16 @@ const plans = [
         </ul>
         <button
           :class="plan.code === 'starter' ? 'primary' : ''"
-          :disabled="busy || plan.code === current || (plan.code === 'free' && current !== undefined)"
+          :disabled="
+            busy ||
+            (plan.code === current && interval === props.currentInterval) ||
+            (plan.code === 'free' && current !== undefined)
+          "
           @click="emit('choose', plan.code, interval)"
         >
           {{
             t(
-              plan.code === current
+              plan.code === current && interval === props.currentInterval
                 ? 'pricing.current'
                 : plan.code === 'free'
                   ? 'pricing.startFree'

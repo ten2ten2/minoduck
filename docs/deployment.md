@@ -48,6 +48,8 @@ Compose 的数据库卷挂到 `/var/lib/postgresql`。Worker 收到退出信号�
 
 Stripe 配置采用 all-or-nothing：`STRIPE_SECRET_KEY`、`STRIPE_WEBHOOK_SECRET`、`STRIPE_PORTAL_CONFIGURATION` 与四个 Price ID 必须全部存在，否则后端拒绝启动，避免出现 Checkout 可用但 Webhook/Portal 不可用的半配置状态。Webhook 使用 SDK 对应的 API 版本 `2026-08-26.dahlia`，选择 **snapshot events**，端点为 `https://api.minoduck.ai/api/v1/webhooks/stripe`，订阅：
 
+生产环境使用 `sk_live_`/`rk_live_` 密钥时还必须设置 `LEGAL_RELEASE_APPROVED=true`、`LEGAL_ENTITY_NAME`、`LEGAL_CONTACT_EMAIL`、`LEGAL_TERMS_EFFECTIVE_DATE` 与 `LEGAL_PRIVACY_EFFECTIVE_DATE`（日期为 `YYYY-MM-DD`）。缺少任一项时所有后端进程拒绝启动；只有完成商户主体和正式 Terms/Privacy 审核后才能开启 live 收费。Sandbox 密钥不绕过下述真实支付验收。
+
 - `checkout.session.completed`
 - `customer.subscription.created`、`customer.subscription.updated`、`customer.subscription.deleted`
 - `invoice.paid`、`invoice.payment_failed`

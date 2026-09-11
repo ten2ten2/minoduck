@@ -5,10 +5,10 @@ const { scoped, workspace, errorText } = useApi()
 const { money, date } = useMoney()
 const { data, error, status, refresh } = await useAsyncData(
   () => `overview-${workspace.value?.id}`,
-  (_app, { signal }) => scoped('/overview', { signal }),
+  (_app, { signal }) => scoped<OverviewResponse>('/overview', { signal }),
 )
 const currency = ref('USD')
-const currencies = computed<string[]>(() => data.value?.totals?.map((v: any) => v.currency) ?? [])
+const currencies = computed<string[]>(() => data.value?.totals?.map((v) => v.currency) ?? [])
 watch(
   currencies,
   (values) => {
@@ -16,14 +16,12 @@ watch(
   },
   { immediate: true },
 )
-const total = computed(() => data.value?.totals?.find((v: any) => v.currency === currency.value))
-const billed = computed(() => data.value?.billed?.find((v: any) => v.currency === currency.value))
+const total = computed(() => data.value?.totals?.find((v) => v.currency === currency.value))
+const billed = computed(() => data.value?.billed?.find((v) => v.currency === currency.value))
 const providers = computed(
-  () => data.value?.providers?.filter((v: any) => v.currency === currency.value) ?? [],
+  () => data.value?.providers?.filter((v) => v.currency === currency.value) ?? [],
 )
-const maxProvider = computed(() =>
-  Math.max(1, ...providers.value.map((v: any) => Number(v.amount))),
-)
+const maxProvider = computed(() => Math.max(1, ...providers.value.map((v) => Number(v.amount))))
 </script>
 <template>
   <div class="stack">

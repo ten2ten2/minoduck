@@ -157,6 +157,11 @@ func (s Objects) request(ctx context.Context, method, key string, q url.Values, 
 		return nil, fmt.Errorf("STORAGE_UNAVAILABLE")
 	}
 	defer res.Body.Close()
+	// S3 DELETE is logically idempotent for cleanup. Some compatible stores
+	// return 404 for a repeated delete, which is already the desired state.
+	if method == http.MethodDelete && res.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, fmt.Errorf("STORAGE_UNAVAILABLE")
 	}

@@ -6,8 +6,8 @@ const busy = ref(false),
   error = ref(''),
   message = ref(''),
   loaded = ref(false)
-const prices = ref<any[]>([]),
-  accounts = ref<any[]>([]),
+const prices = ref<PriceVersion[]>([]),
+  accounts = ref<Connection[]>([]),
   adding = ref(false)
 const form = reactive({
   billing_provider: 'openai',
@@ -44,8 +44,8 @@ const fields = [
 async function load() {
   try {
     ;[prices.value, accounts.value] = await Promise.all([
-      scoped<any[]>('/prices'),
-      scoped<any[]>('/connections'),
+      scoped<PriceVersion[]>('/prices'),
+      scoped<Connection[]>('/connections'),
     ])
     loaded.value = true
   } catch (e) {
@@ -70,7 +70,10 @@ async function compare() {
   busy.value = true
   error.value = ''
   try {
-    const out = await scoped('/price-comparisons', { method: 'POST', body: { ...comparison } })
+    const out = await scoped<ApiAction>('/price-comparisons', {
+      method: 'POST',
+      body: { ...comparison },
+    })
     message.value = t(out.status === 'no_savings' ? 'prices.noSavings' : 'common.saved')
     emit('updated')
   } catch (e) {

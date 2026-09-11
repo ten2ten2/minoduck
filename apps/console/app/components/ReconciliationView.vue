@@ -1,13 +1,20 @@
 <script setup lang="ts">
 const props = defineProps<{ id?: string }>()
 const { t } = useI18n()
-const { scoped, workspace, errorText } = useApi()
+const { scoped, workspace, errorText, errorCode } = useApi()
 const { money, date } = useMoney()
 const { data, error, refresh } = await useAsyncData(
   () => `reconciliation-${workspace.value?.id}-${props.id ?? 'all'}`,
   (_app, { signal }) =>
-    scoped(props.id ? `/reconciliation-runs/${props.id}` : '/reconciliation-runs', { signal }),
+    scoped<ReconciliationRun | ReconciliationSummary[]>(
+      props.id ? `/reconciliation-runs/${props.id}` : '/reconciliation-runs',
+      { signal },
+    ),
 )
+const detail = computed(() =>
+  props.id && data.value && !Array.isArray(data.value) ? data.value : undefined,
+)
+const runs = computed(() => (Array.isArray(data.value) ? data.value : []))
 const handling = ref('explained'),
   note = ref(''),
   busy = ref(false),
@@ -36,38 +43,40 @@ async function save() {
       </NuxtLink>
     </PageHeading>
     <UsageReconciliationForm v-if="!id && workspace?.role !== 'viewer'" @created="refresh()" />
-    <UpgradeNotice v-if="(error?.data as any)?.error?.code === 'UPGRADE_REQUIRED'" />
+    <UpgradeNotice v-if="errorCode(error) === 'UPGRADE_REQUIRED'" />
     <div v-else-if="error" class="notice error" role="alert">{{ errorText(error) }}</div>
-    <template v-else-if="id && data">
+    <template v-else-if="id && detail">
       <div class="row between">
-        <h2>{{ t('reconciliation.version', { version: data.run_version }) }}</h2>
-        <StatusBadge :value="data.match_status" />
+        <h2>{{ t('reconciliation.version', { version: detail.run_version }) }}</h2>
+        <StatusBadge :value="detail.match_status" />
       </div>
       <div class="grid-3">
         <article class="panel metric">
           <p class="muted">{{ t('reconciliation.expected') }}</p>
-          <div class="metric-value">{{ money(data.expected, data.currency) }}</div>
+          <div class="metric-value">{{ money(detail.expected, detail.currency) }}</div>
         </article>
         <article class="panel metric">
           <p class="muted">
-            {{ t(data.level === 'L1' ? 'reconciliation.actualCompared' : 'reconciliation.billed') }}
+            {{
+              t(detail.level === 'L1' ? 'reconciliation.actualCompared' : 'reconciliation.billed')
+            }}
           </p>
-          <div class="metric-value">{{ money(data.billed, data.currency) }}</div>
+          <div class="metric-value">{{ money(detail.billed, detail.currency) }}</div>
         </article>
         <article class="panel metric">
           <p class="muted">{{ t('reconciliation.difference') }}</p>
-          <div class="metric-value">{{ money(data.difference, data.currency) }}</div>
+          <div class="metric-value">{{ money(detail.difference, detail.currency) }}</div>
         </article>
       </div>
       <p class="muted">{{ t('reconciliation.tolerance') }}</p>
       <article class="panel stack">
         <h2>{{ t('costs.evidence') }}</h2>
         <p>
-          {{ data.evidence.source_scope }} · {{ date(data.evidence.period_start) }} —
-          {{ date(data.evidence.period_end) }}
+          {{ detail.evidence.source_scope }} · {{ date(detail.evidence.period_start) }} —
+          {{ date(detail.evidence.period_end) }}
         </p>
-        <template v-if="data.level === 'L1'">
-          <div v-if="data.evidence.price_evidence?.length" class="table-scroll">
+        <template v-if="detail.level === 'L1'">
+          <div v-if="detail.evidence.price_evidence?.length" class="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -77,14 +86,19 @@ async function save() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="entry in data.evidence.price_evidence" :key="entry.usage_id">
+                <tr v-for="entry in detail.evidence.price_evidence" :key="entry.usage_id">
                   <td>
-                    <a class="link" :href="entry.reference" target="_blank" rel="noopener noreferrer">
+                    <a
+                      class="link"
+                      :href="entry.reference"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
                       {{ entry.price_version_id }}
                     </a>
                   </td>
                   <td>{{ t(`prices.${entry.price_basis}`) }}</td>
-                  <td class="amount">{{ money(entry.amount, data.currency) }}</td>
+                  <td class="amount">{{ money(entry.amount, detail.currency) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -92,7 +106,9 @@ async function save() {
           <p v-else class="muted">{{ t('reconciliation.usageHelp') }}</p>
         </template>
         <template v-else>
-          <p>{{ t('invoices.adjustment') }}: {{ money(data.evidence.adjustment, data.currency) }}</p>
+          <p>
+            {{ t('invoices.adjustment') }}: {{ money(detail.evidence.adjustment, detail.currency) }}
+          </p>
           <div class="table-scroll">
             <table>
               <thead>
@@ -102,7 +118,7 @@ async function save() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="entry in data.evidence.entry_refs" :key="entry.entry_id">
+                <tr v-for="entry in detail.evidence.entry_refs" :key="entry.entry_id">
                   <td>
                     <NuxtLink class="link" :to="`/w/${workspace?.slug}/costs/${entry.entry_id}`">
                       {{ entry.entry_id }}
@@ -117,8 +133,8 @@ async function save() {
       </article>
       <form v-if="workspace?.role !== 'viewer'" class="panel stack" @submit.prevent="save">
         <h2>{{ t('reconciliation.handling') }}</h2>
-        <StatusBadge :value="data.handling_status" />
-        <p v-if="data.handling_note">{{ data.handling_note }}</p>
+        <StatusBadge :value="detail.handling_status" />
+        <p v-if="detail.handling_note">{{ detail.handling_note }}</p>
         <div v-if="actionError" class="notice error" role="alert">{{ actionError }}</div>
         <label>
           {{ t('reconciliation.handling') }}
@@ -137,7 +153,7 @@ async function save() {
         </div>
       </form>
     </template>
-    <div v-else-if="data?.length" class="panel table-scroll">
+    <div v-else-if="runs.length" class="panel table-scroll">
       <table>
         <thead>
           <tr>
@@ -150,7 +166,7 @@ async function save() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="run in data" :key="run.id">
+          <tr v-for="run in runs" :key="run.id">
             <td>{{ date(run.created_at) }}</td>
             <td>{{ run.run_version }}</td>
             <td><StatusBadge :value="run.match_status" /></td>

@@ -25,9 +25,8 @@ export function formatMoneyExact(
       (part) => part.type === 'integer' || part.type === 'group',
     )
     const decimal =
-      new Intl.NumberFormat(language)
-        .formatToParts(1.1)
-        .find((part) => part.type === 'decimal')?.value ?? '.'
+      new Intl.NumberFormat(language).formatToParts(1.1).find((part) => part.type === 'decimal')
+        ?.value ?? '.'
     parts.splice(
       lastNumberPart + 1,
       0,

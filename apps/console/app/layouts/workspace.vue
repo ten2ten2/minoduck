@@ -56,7 +56,13 @@ watch(
 </script>
 <template>
   <div class="console-shell">
-    <div v-if="mobileOpen" class="nav-backdrop" @click="mobileOpen = false" />
+    <button
+      v-if="mobileOpen"
+      type="button"
+      class="nav-backdrop"
+      :aria-label="t('common.close')"
+      @click="mobileOpen = false"
+    />
     <aside class="sidebar" :class="{ opened: mobileOpen }">
       <NuxtLink to="/onboarding" class="sidebar-brand"><BrandWordmark /></NuxtLink>
       <label class="workspace-select">
@@ -118,6 +124,9 @@ watch(
         <PreferencesControl @change="savePreferences" />
       </header>
       <main class="console-main">
+        <div v-if="workspace?.billing_suspended" class="notice warning" role="status">
+          {{ t('billing.workspaceReadonly') }}
+        </div>
         <div v-if="error || preferenceError" class="notice error" role="alert">
           {{ error || preferenceError }}
         </div>

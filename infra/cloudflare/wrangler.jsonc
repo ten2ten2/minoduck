@@ -2,5 +2,5 @@
   "name": "minoduck-canonical-redirect",
   "main": "redirect.mjs",
   "compatibility_date": "2026-09-10",
-  "routes": [{ "pattern": "minoduck.ai", "custom_domain": true }]
+  "routes": [{ "pattern": "minoduck.ai", "custom_domain": true }],
 }

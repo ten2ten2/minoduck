@@ -52,7 +52,25 @@ func TestSyncFailureStateWorksWithRuntimeRLS(t *testing.T) {
 
 	uid, billingID, wid, aid := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	email := "jobs-" + uuid.NewString() + "@example.test"
-	if _, err = admin.Exec(ctx, `INSERT INTO users(id,email) VALUES($1,$2); INSERT INTO billing_accounts(id,owner_id) VALUES($3,$1); INSERT INTO workspaces(id,billing_account_id,slug,name) VALUES($4,$3,$5,'Jobs test'); INSERT INTO provider_accounts(id,workspace_id,provider,name,external_account_ref,status,credential_cipher,credential_key_id,generation,next_sync_at) VALUES($6,$4,'openai','Fixture','fixture','ready',$7,'old-key',2,now()+interval '1 hour')`, uid, email, billingID, wid, "jobs-"+uuid.NewString()[:12], aid, []byte{1}); err != nil {
+	fixture, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Rollback(ctx)
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users(id,email) VALUES($1,$2)`, []any{uid, email}},
+		{`INSERT INTO billing_accounts(id,owner_id) VALUES($1,$2)`, []any{billingID, uid}},
+		{`INSERT INTO workspaces(id,billing_account_id,slug,name) VALUES($1,$2,$3,'Jobs test')`, []any{wid, billingID, "jobs-" + uuid.NewString()[:12]}},
+		{`INSERT INTO provider_accounts(id,workspace_id,provider,name,external_account_ref,status,credential_cipher,credential_key_id,generation,next_sync_at) VALUES($1,$2,'openai','Fixture','fixture','ready',$3,'old-key',2,now()+interval '1 hour')`, []any{aid, wid, []byte{1}}},
+	} {
+		if _, err = fixture.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = fixture.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	worker := Worker{DB: db, Config: platform.Config{KeyID: "new-key"}}

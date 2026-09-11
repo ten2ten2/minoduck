@@ -99,3 +99,33 @@ func TestStripeEventSubject(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAITextUsageRejectsNonComparableDimensions(t *testing.T) {
+	plain := map[string]string{
+		"input_total": "100", "input_cached_subset": "20", "output": "10",
+		"input_text": "80", "input_cached_text": "20", "output_text": "10",
+		"input_audio": "0",
+	}
+	if !textUsageComparable("openai", plain, map[string]string{"batch": "false"}) {
+		t.Fatal("plain text usage was rejected")
+	}
+	for _, key := range []string{"input_audio", "input_cached_audio", "input_image", "input_cached_image", "cache_write"} {
+		metrics := map[string]string{}
+		for name, value := range plain {
+			metrics[name] = value
+		}
+		metrics[key] = "1"
+		if textUsageComparable("openai", metrics, map[string]string{}) {
+			t.Fatalf("non-comparable metric was accepted: %s", key)
+		}
+	}
+	if textUsageComparable("openai", plain, map[string]string{"batch": "true"}) {
+		t.Fatal("batch usage was accepted")
+	}
+	if textUsageComparable("openai", map[string]string{"input_total": "10", "input_cached_subset": "0", "output": "1"}, map[string]string{}) {
+		t.Fatal("usage without text breakdown was accepted")
+	}
+	if textUsageComparable("openai", map[string]string{"input_total": "10", "input_cached_subset": "0", "output": "1", "input_text": "9", "output_text": "1"}, map[string]string{}) {
+		t.Fatal("inconsistent text breakdown was accepted")
+	}
+}

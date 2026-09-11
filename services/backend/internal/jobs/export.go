@@ -95,11 +95,21 @@ func (w *Worker) export(ctx context.Context, a tasks.Args) error {
 		return fmt.Errorf("EXPORT_TOO_LARGE")
 	}
 	object := a.WorkspaceID + "/" + a.ResourceID + ".csv"
+	if e = platform.RegisterObjectIntent(ctx, w.DB, a.WorkspaceID, object, "export"); e != nil {
+		return e
+	}
 	if e = w.Objects.Put(ctx, object, b.Bytes()); e != nil {
+		_ = platform.CleanupObject(context.Background(), w.DB, w.Objects, a.WorkspaceID, object)
 		return e
 	}
 	if _, e = tx.Exec(ctx, `UPDATE exports SET state='ready',object_key=$1,expires_at=now()+interval '24 hours' WHERE workspace_id=$2 AND id=$3`, object, a.WorkspaceID, a.ResourceID); e != nil {
+		_ = platform.CleanupObject(context.Background(), w.DB, w.Objects, a.WorkspaceID, object)
 		return e
 	}
-	return tx.Commit(ctx)
+	if e = tx.Commit(ctx); e != nil {
+		// Commit errors are ambiguous: the database may already reference the
+		// object. Leave the intent to let maintenance resolve linked vs orphaned.
+		return e
+	}
+	return platform.ClearObjectIntent(ctx, w.DB, a.WorkspaceID, object)
 }

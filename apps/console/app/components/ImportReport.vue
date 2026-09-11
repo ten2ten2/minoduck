@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{ accounts: any[]; accountId?: string }>()
+const props = defineProps<{ accounts: Connection[]; accountId?: string }>()
 const emit = defineEmits<{ committed: [] }>()
 const { t } = useI18n()
 const { scoped, errorText } = useApi()
@@ -21,7 +21,7 @@ const file = ref<File>(),
   busy = ref(false),
   error = ref(''),
   message = ref(''),
-  preview = ref<any>(),
+  preview = ref<ImportPreview | null>(null),
   confirmCorrections = ref(false)
 watch(
   () => props.accountId,
@@ -46,7 +46,7 @@ async function validate() {
     body.append('timezone', timezone.value)
     body.append('cost_kind', kind.value)
     body.append('granularity', granularity.value)
-    preview.value = await scoped('/imports', { method: 'POST', body })
+    preview.value = await scoped<ImportPreview>('/imports', { method: 'POST', body })
   } catch (e) {
     error.value = errorText(e)
   } finally {
@@ -54,6 +54,7 @@ async function validate() {
   }
 }
 async function commit() {
+  if (!preview.value) return
   busy.value = true
   error.value = ''
   try {

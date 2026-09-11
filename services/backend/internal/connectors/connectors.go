@@ -66,6 +66,13 @@ type Snapshot struct {
 }
 type Client struct{ HTTP *http.Client }
 
+type ProviderIdentity struct {
+	ID       string
+	Name     string
+	Scope    string
+	Verified bool
+}
+
 func (c Client) get(ctx context.Context, provider, key, path string, query url.Values, out any) error {
 	hosts := map[string]string{"openai": "https://api.openai.com", "anthropic": "https://api.anthropic.com", "openrouter": "https://openrouter.ai"}
 	host, ok := hosts[provider]
@@ -110,6 +117,10 @@ func (c Client) get(ctx context.Context, provider, key, path string, query url.V
 			} else if at, e := http.ParseTime(res.Header.Get("Retry-After")); e == nil {
 				fail.RetryAfter = time.Until(at)
 			}
+		case 408, 409, 425:
+			// Request timeout, conflict and Too Early are safe to retry. In
+			// particular, treating 408/425 as schema failures permanently broke
+			// otherwise healthy connections.
 		default:
 			if res.StatusCode < 500 {
 				fail.Code = "SOURCE_SCHEMA_CHANGED"
@@ -130,10 +141,77 @@ func (c Client) get(ctx context.Context, provider, key, path string, query url.V
 	if e = d.Decode(out); e != nil {
 		return Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
 	}
+	if e = d.Decode(&struct{}{}); e != io.EOF {
+		return Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+	}
 	return nil
 }
-func (c Client) Fetch(ctx context.Context, provider, key string, start, end time.Time) (Snapshot, error) {
-	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: "2026-09-11.1"}
+
+// Identity resolves the stable provider-side scope attached to a credential.
+// OpenAI's organization usage API does not currently expose an equivalent
+// identity endpoint, so its user-supplied account reference remains explicitly
+// unverified.
+func (c Client) Identity(ctx context.Context, provider, key, requested string) (ProviderIdentity, error) {
+	switch provider {
+	case "openai":
+		return ProviderIdentity{ID: requested, Scope: "organization", Verified: false}, nil
+	case "anthropic":
+		var organization struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := c.get(ctx, provider, key, "/v1/organizations/me", url.Values{}, &organization); err != nil {
+			return ProviderIdentity{}, err
+		}
+		if organization.ID == "" {
+			return ProviderIdentity{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+		}
+		return ProviderIdentity{ID: organization.ID, Name: organization.Name, Scope: "organization", Verified: true}, nil
+	case "openrouter":
+		if requested == "" {
+			return ProviderIdentity{}, Failure{Code: "PROVIDER_SCOPE_REQUIRED", Permanent: true}
+		}
+		q := url.Values{"limit": {"100"}, "offset": {"0"}}
+		offset := 0
+		for {
+			var page struct {
+				Data []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+					Slug string `json:"slug"`
+				} `json:"data"`
+				Total *int `json:"total_count"`
+			}
+			if err := c.get(ctx, provider, key, "/api/v1/workspaces", q, &page); err != nil {
+				return ProviderIdentity{}, err
+			}
+			if page.Data == nil || page.Total == nil || *page.Total < 0 || *page.Total < offset+len(page.Data) {
+				return ProviderIdentity{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+			}
+			for _, workspace := range page.Data {
+				if workspace.ID == requested || workspace.Slug == requested {
+					if workspace.ID == "" {
+						return ProviderIdentity{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+					}
+					return ProviderIdentity{ID: workspace.ID, Name: workspace.Name, Scope: "workspace", Verified: true}, nil
+				}
+			}
+			offset += len(page.Data)
+			if offset >= *page.Total {
+				return ProviderIdentity{}, Failure{Code: "PROVIDER_SCOPE_NOT_FOUND", Permanent: true}
+			}
+			if len(page.Data) == 0 {
+				return ProviderIdentity{}, Failure{Code: "SOURCE_PAGINATION_INCOMPLETE", Permanent: true}
+			}
+			q.Set("offset", strconv.Itoa(offset))
+		}
+	default:
+		return ProviderIdentity{}, Failure{Code: "UNSUPPORTED_PROVIDER", Permanent: true}
+	}
+}
+
+func (c Client) Fetch(ctx context.Context, provider, key, providerIdentity string, start, end time.Time) (Snapshot, error) {
+	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: "2026-09-11.3"}
 	if !end.After(start) || end.After(time.Now().UTC().Truncate(24*time.Hour)) {
 		return s, Failure{Code: "INVALID_SYNC_WINDOW", Permanent: true}
 	}
@@ -144,7 +222,7 @@ func (c Client) Fetch(ctx context.Context, provider, key string, start, end time
 	case "anthropic":
 		e = c.anthropic(ctx, key, &s)
 	case "openrouter":
-		e = c.openRouter(ctx, key, &s)
+		e = c.openRouter(ctx, key, providerIdentity, &s)
 	default:
 		e = Failure{Code: "UNSUPPORTED_PROVIDER", Permanent: true}
 	}
@@ -244,7 +322,7 @@ func (c Client) openAI(ctx context.Context, key string, s *Snapshot) error {
 		q.Set("page", *page.Next)
 	}
 	q.Del("page")
-	q["group_by"] = []string{"model", "project_id", "service_tier"}
+	q["group_by"] = []string{"model", "project_id", "service_tier", "batch"}
 	seen = map[string]bool{}
 	for {
 		var page struct {
@@ -252,13 +330,24 @@ func (c Client) openAI(ctx context.Context, key string, s *Snapshot) error {
 				Start   int64 `json:"start_time"`
 				End     int64 `json:"end_time"`
 				Results []struct {
-					Model    *string `json:"model"`
-					Project  *string `json:"project_id"`
-					Tier     *string `json:"service_tier"`
-					Input    Scalar  `json:"input_tokens"`
-					Cached   Scalar  `json:"input_cached_tokens"`
-					Output   Scalar  `json:"output_tokens"`
-					Requests Scalar  `json:"num_model_requests"`
+					Model       *string `json:"model"`
+					Project     *string `json:"project_id"`
+					Tier        *string `json:"service_tier"`
+					Batch       *bool   `json:"batch"`
+					Input       Scalar  `json:"input_tokens"`
+					Cached      Scalar  `json:"input_cached_tokens"`
+					Output      Scalar  `json:"output_tokens"`
+					InputAudio  Scalar  `json:"input_audio_tokens"`
+					CachedAudio Scalar  `json:"input_cached_audio_tokens"`
+					OutputAudio Scalar  `json:"output_audio_tokens"`
+					InputImage  Scalar  `json:"input_image_tokens"`
+					CachedImage Scalar  `json:"input_cached_image_tokens"`
+					OutputImage Scalar  `json:"output_image_tokens"`
+					InputText   Scalar  `json:"input_text_tokens"`
+					CachedText  Scalar  `json:"input_cached_text_tokens"`
+					OutputText  Scalar  `json:"output_text_tokens"`
+					CacheWrite  Scalar  `json:"input_cache_write_tokens"`
+					Requests    Scalar  `json:"num_model_requests"`
 				} `json:"results"`
 			} `json:"data"`
 			More bool    `json:"has_more"`
@@ -272,8 +361,8 @@ func (c Client) openAI(ctx context.Context, key string, s *Snapshot) error {
 		}
 		for _, b := range page.Data {
 			for _, r := range b.Results {
-				d := map[string]string{"project_id": nullable(r.Project), "service_tier": nullable(r.Tier)}
-				u := Usage{Start: time.Unix(b.Start, 0).UTC(), End: time.Unix(b.End, 0).UTC(), Model: nullable(r.Model), Dimensions: d, Metrics: map[string]Scalar{"input_total": r.Input, "input_cached_subset": r.Cached, "output": r.Output, "requests": r.Requests}}
+				d := map[string]string{"project_id": nullable(r.Project), "service_tier": nullable(r.Tier), "batch": strconv.FormatBool(r.Batch != nil && *r.Batch), "usage_type": "completions"}
+				u := Usage{Start: time.Unix(b.Start, 0).UTC(), End: time.Unix(b.End, 0).UTC(), Model: nullable(r.Model), Dimensions: d, Metrics: map[string]Scalar{"input_total": r.Input, "input_cached_subset": r.Cached, "output": r.Output, "input_audio": r.InputAudio, "input_cached_audio": r.CachedAudio, "output_audio": r.OutputAudio, "input_image": r.InputImage, "input_cached_image": r.CachedImage, "output_image": r.OutputImage, "input_text": r.InputText, "input_cached_text": r.CachedText, "output_text": r.OutputText, "cache_write": r.CacheWrite, "requests": r.Requests}}
 				setUsageKey(&u)
 				s.Usage = append(s.Usage, u)
 			}
@@ -409,7 +498,10 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 	}
 	return nil
 }
-func (c Client) openRouter(ctx context.Context, key string, s *Snapshot) error {
+func (c Client) openRouter(ctx context.Context, key, workspaceID string, s *Snapshot) error {
+	if workspaceID == "" {
+		return Failure{Code: "PROVIDER_SCOPE_REQUIRED", Permanent: true}
+	}
 	if s.Start.Before(time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -30)) {
 		return Failure{Code: "PROVIDER_HISTORY_LIMIT", Permanent: true}
 	}
@@ -428,7 +520,7 @@ func (c Client) openRouter(ctx context.Context, key string, s *Snapshot) error {
 				Requests Scalar  `json:"requests"`
 			} `json:"data"`
 		}
-		if e := c.get(ctx, "openrouter", key, "/api/v1/activity", url.Values{"date": {day.Format("2006-01-02")}}, &page); e != nil {
+		if e := c.get(ctx, "openrouter", key, "/api/v1/activity", url.Values{"date": {day.Format("2006-01-02")}, "workspace_id": {workspaceID}}, &page); e != nil {
 			return e
 		}
 		if page.Data == nil {

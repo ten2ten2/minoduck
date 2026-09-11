@@ -24,6 +24,13 @@ type Worker struct {
 	Queue   *river.Client[pgx.Tx]
 }
 
+type stagedSyncShard struct {
+	Batch    string
+	Object   string
+	Hash     string
+	Snapshot connectors.Snapshot
+}
+
 func (w *Worker) Timeout(*river.Job[tasks.Args]) time.Duration { return 12 * time.Minute }
 func (w *Worker) Work(ctx context.Context, job *river.Job[tasks.Args]) (err error) {
 	defer func() {
@@ -82,7 +89,8 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[tasks.Args]) (err erro
 }
 func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	a := job.Args
-	var aid, provider, status, keyID string
+	var aid, provider, status, keyID, accountRef string
+	var storedIdentity *string
 	var generation, currentGeneration int
 	var encrypted []byte
 	var start, end time.Time
@@ -90,7 +98,7 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	if e != nil {
 		return e
 	}
-	e = readTx.QueryRow(ctx, `SELECT r.account_id,r.generation,r.period_start,r.period_end,p.provider,p.status,p.credential_cipher,p.credential_key_id,p.generation FROM sync_runs r JOIN provider_accounts p ON p.id=r.account_id AND p.workspace_id=r.workspace_id WHERE r.id=$1 AND r.workspace_id=$2`, a.ResourceID, a.WorkspaceID).Scan(&aid, &generation, &start, &end, &provider, &status, &encrypted, &keyID, &currentGeneration)
+	e = readTx.QueryRow(ctx, `SELECT r.account_id,r.generation,r.period_start,r.period_end,p.provider,p.status,p.credential_cipher,p.credential_key_id,p.generation,p.external_account_ref,p.provider_identity FROM sync_runs r JOIN provider_accounts p ON p.id=r.account_id AND p.workspace_id=r.workspace_id WHERE r.id=$1 AND r.workspace_id=$2`, a.ResourceID, a.WorkspaceID).Scan(&aid, &generation, &start, &end, &provider, &status, &encrypted, &keyID, &currentGeneration, &accountRef, &storedIdentity)
 	_ = readTx.Rollback(ctx)
 	if e != nil {
 		return e
@@ -133,7 +141,7 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	if e != nil {
 		return e
 	}
-	started, e := stateTx.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID)
+	started, e := stateTx.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running')`, a.WorkspaceID, a.ResourceID)
 	if e != nil {
 		_ = stateTx.Rollback(ctx)
 		return e
@@ -159,98 +167,198 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 			}
 		}
 	}()
+	client := connectors.Client{}
+	identity, e := client.Identity(ctx, provider, key, accountRef)
+	if e != nil {
+		return w.syncFailure(ctx, job, aid, generation, e)
+	}
+	if storedIdentity != nil && *storedIdentity != "" && *storedIdentity != identity.ID {
+		return w.syncFailure(ctx, job, aid, generation, connectors.Failure{Code: "PROVIDER_IDENTITY_MISMATCH", Permanent: true})
+	}
+	identityTx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
+	if e != nil {
+		return e
+	}
+	var deleted bool
+	if e = identityTx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM workspaces WHERE id=$1 FOR SHARE`, a.WorkspaceID).Scan(&deleted); e != nil {
+		_ = identityTx.Rollback(ctx)
+		return e
+	}
+	var lockedGeneration int
+	var lockedStatus string
+	var lockedIdentity *string
+	if e = identityTx.QueryRow(ctx, `SELECT generation,status,provider_identity FROM provider_accounts WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, a.WorkspaceID, aid).Scan(&lockedGeneration, &lockedStatus, &lockedIdentity); e != nil {
+		_ = identityTx.Rollback(ctx)
+		return e
+	}
+	if deleted || lockedGeneration != generation || lockedStatus == "disconnected" || (lockedIdentity != nil && *lockedIdentity != "" && *lockedIdentity != identity.ID) {
+		_, _ = identityTx.Exec(ctx, `UPDATE sync_runs SET state='canceled',finished_at=now(),error_code='CONNECTION_DISCONNECTED' WHERE workspace_id=$1 AND id=$2`, a.WorkspaceID, a.ResourceID)
+		if e = identityTx.Commit(ctx); e != nil {
+			return e
+		}
+		return river.JobCancel(fmt.Errorf("CONNECTION_DISCONNECTED"))
+	}
+	if identity.Verified {
+		if _, e = identityTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "provider-identity:"+provider+":"+identity.ID); e != nil {
+			_ = identityTx.Rollback(ctx)
+			return e
+		}
+		var duplicate bool
+		e = identityTx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM provider_accounts other JOIN workspaces ow ON ow.id=other.workspace_id JOIN workspaces current ON current.id=$1 WHERE ow.billing_account_id=current.billing_account_id AND other.id<>$2 AND other.provider=$3 AND other.provider_identity=$4 AND other.status<>'disconnected')`, a.WorkspaceID, aid, provider, identity.ID).Scan(&duplicate)
+		if e != nil {
+			_ = identityTx.Rollback(ctx)
+			return e
+		}
+		if duplicate {
+			_ = identityTx.Rollback(ctx)
+			return w.syncFailure(ctx, job, aid, generation, connectors.Failure{Code: "ACCOUNT_ALREADY_CONNECTED", Permanent: true})
+		}
+	}
+	if _, e = identityTx.Exec(ctx, `UPDATE provider_accounts SET provider_identity=$1,provider_scope=$2,identity_verified=$3,identity_verified_at=CASE WHEN $3 THEN now() ELSE NULL END WHERE workspace_id=$4 AND id=$5`, identity.ID, identity.Scope, identity.Verified, a.WorkspaceID, aid); e != nil {
+		_ = identityTx.Rollback(ctx)
+		return e
+	}
+	if e = identityTx.Commit(ctx); e != nil {
+		return e
+	}
+	staged := []stagedSyncShard{}
 	for from := start; from.Before(end); from = from.AddDate(0, 0, 7) {
 		to := from.AddDate(0, 0, 7)
 		if to.After(end) {
 			to = end
 		}
-		snapshot, e := (connectors.Client{}).Fetch(ctx, provider, key, from, to)
+		snapshot, e := client.Fetch(ctx, provider, key, identity.ID, from, to)
 		if e != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			return w.syncFailure(ctx, job, aid, generation, e)
 		}
-		batch := uuid.NewString()
-		object := a.WorkspaceID + "/" + batch + ".json"
 		data, e := json.Marshal(snapshot)
 		if e != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			return e
 		}
 		if len(data) > 64*1024*1024 {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			return w.syncFailure(ctx, job, aid, generation, connectors.Failure{Code: "SOURCE_TOO_LARGE", Permanent: true})
 		}
+		hash := ledger.Hash(data)
+		checkTx, checkErr := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
+		if checkErr != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
+			return checkErr
+		}
+		var exists bool
+		checkErr = checkTx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM source_batches WHERE workspace_id=$1 AND account_id=$2 AND source_scope='native-cost' AND state='committed' AND content_hash=$3 AND period_start=$4 AND period_end=$5)`, a.WorkspaceID, aid, hash, snapshot.Start, snapshot.End).Scan(&exists)
+		_ = checkTx.Rollback(ctx)
+		if checkErr != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
+			return checkErr
+		}
+		if exists {
+			continue
+		}
+		batch := uuid.NewString()
+		object := a.WorkspaceID + "/" + batch + ".json"
+		if e = platform.RegisterObjectIntent(ctx, w.DB, a.WorkspaceID, object, "source"); e != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
+			return e
+		}
 		if e = w.Objects.Put(ctx, object, data); e != nil {
+			_ = platform.CleanupObject(context.Background(), w.DB, w.Objects, a.WorkspaceID, object)
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			return e
 		}
-		tx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
-		if e != nil {
-			_ = w.Objects.Delete(ctx, object)
+		staged = append(staged, stagedSyncShard{Batch: batch, Object: object, Hash: hash, Snapshot: snapshot})
+	}
+	tx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
+	if e != nil {
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
+		return e
+	}
+	defer tx.Rollback(ctx)
+	if e = tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM workspaces WHERE id=$1 FOR SHARE`, a.WorkspaceID).Scan(&deleted); e != nil {
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
+		return e
+	}
+	var g int
+	var finalStatus string
+	e = tx.QueryRow(ctx, `SELECT generation,status FROM provider_accounts WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, a.WorkspaceID, aid).Scan(&g, &finalStatus)
+	if e != nil {
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
+		return e
+	}
+	if deleted || g != generation || finalStatus == "disconnected" {
+		if _, e = tx.Exec(ctx, `UPDATE sync_runs SET state='canceled',finished_at=now(),error_code='CONNECTION_DISCONNECTED' WHERE workspace_id=$1 AND id=$2`, a.WorkspaceID, a.ResourceID); e != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			return e
 		}
-		e = w.publishShard(ctx, tx, a, aid, generation, batch, object, data, snapshot)
-		if e != nil {
-			tx.Rollback(ctx)
-			_ = w.Objects.Delete(ctx, object)
+		if e = tx.Commit(ctx); e != nil {
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
+			return e
+		}
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
+		return river.JobCancel(fmt.Errorf("CONNECTION_DISCONNECTED"))
+	}
+	for _, shard := range staged {
+		if e = w.publishShardLocked(ctx, tx, a, aid, shard); e != nil {
+			_ = tx.Rollback(ctx)
+			w.cleanupSyncObjects(a.WorkspaceID, staged)
 			var failure connectors.Failure
 			if errors.As(e, &failure) {
 				return w.syncFailure(ctx, job, aid, generation, e)
 			}
 			return e
 		}
-		if e = tx.Commit(ctx); e != nil {
-			return e
-		}
-	}
-	tx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback(ctx)
-	var g int
-	e = tx.QueryRow(ctx, `SELECT generation FROM provider_accounts WHERE workspace_id=$1 AND id=$2 AND status<>'disconnected' FOR UPDATE`, a.WorkspaceID, aid).Scan(&g)
-	if e != nil || g != generation {
-		return river.JobCancel(fmt.Errorf("CONNECTION_DISCONNECTED"))
 	}
 	if _, e = tx.Exec(ctx, `UPDATE sync_runs SET state='succeeded',finished_at=now(),error_code=NULL WHERE workspace_id=$1 AND id=$2`, a.WorkspaceID, a.ResourceID); e != nil {
+		_ = tx.Rollback(ctx)
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
 		return e
 	}
-	if _, e = tx.Exec(ctx, `UPDATE provider_accounts SET status='ready',last_sync_at=now(),data_through=$1,error_code=NULL WHERE workspace_id=$2 AND id=$3`, end, a.WorkspaceID, aid); e != nil {
+	if _, e = tx.Exec(ctx, `UPDATE provider_accounts SET status='ready',last_sync_at=now(),data_through=greatest(coalesce(data_through,$1),$1),backfill_cursor=least(coalesce(backfill_cursor,$2),$2),error_code=NULL WHERE workspace_id=$3 AND id=$4`, end, start, a.WorkspaceID, aid); e != nil {
+		_ = tx.Rollback(ctx)
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
 		return e
 	}
 	if _, e = w.Queue.InsertTx(ctx, tx, tasks.Args{Task: "insights", WorkspaceID: a.WorkspaceID, ResourceID: a.WorkspaceID}, nil); e != nil {
+		_ = tx.Rollback(ctx)
+		w.cleanupSyncObjects(a.WorkspaceID, staged)
 		return e
 	}
-	return tx.Commit(ctx)
+	if e = tx.Commit(ctx); e != nil {
+		// A failed commit response does not prove rollback. Durable intents let
+		// maintenance keep committed evidence or delete genuinely orphaned shards.
+		return e
+	}
+	for _, shard := range staged {
+		_ = platform.ClearObjectIntent(ctx, w.DB, a.WorkspaceID, shard.Object)
+	}
+	return nil
 }
-func (w *Worker) publishShard(ctx context.Context, tx pgx.Tx, a tasks.Args, aid string, generation int, batch, object string, data []byte, snapshot connectors.Snapshot) error {
-	var g int
-	var state string
-	e := tx.QueryRow(ctx, `SELECT generation,status FROM provider_accounts WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, a.WorkspaceID, aid).Scan(&g, &state)
-	if e != nil {
-		return e
+
+func (w *Worker) cleanupSyncObjects(wid string, shards []stagedSyncShard) {
+	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, shard := range shards {
+		_ = platform.CleanupObject(cleanup, w.DB, w.Objects, wid, shard.Object)
 	}
-	if g != generation || state == "disconnected" {
-		return river.JobCancel(fmt.Errorf("CONNECTION_DISCONNECTED"))
-	}
-	var deleted bool
-	e = tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM workspaces WHERE id=$1 FOR SHARE`, a.WorkspaceID).Scan(&deleted)
-	if e != nil {
-		return e
-	}
-	if deleted {
-		return river.JobCancel(fmt.Errorf("WORKSPACE_DELETED"))
-	}
+}
+
+func (w *Worker) publishShardLocked(ctx context.Context, tx pgx.Tx, a tasks.Args, aid string, shard stagedSyncShard) error {
+	snapshot := shard.Snapshot
 	var overlap bool
-	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND is_current AND cost_kind='actual' AND source_scope<>'native-cost' AND period_start<$4 AND period_end>$3)`, a.WorkspaceID, aid, snapshot.Start, snapshot.End).Scan(&overlap); e != nil {
+	if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND is_current AND cost_kind='actual' AND source_scope<>'native-cost' AND period_start<$4 AND period_end>$3)`, a.WorkspaceID, aid, snapshot.Start, snapshot.End).Scan(&overlap); e != nil {
 		return e
 	}
 	if overlap {
 		return connectors.Failure{Code: "OVERLAPPING_SOURCE_SCOPE", Permanent: true}
 	}
 	preview, _ := json.Marshal(map[string]any{"period_start": snapshot.Start, "period_end": snapshot.End, "row_count": len(snapshot.Entries), "connector_version": snapshot.Version})
-	_, e = tx.Exec(ctx, `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview,committed_at) VALUES($1,$2,$3,$4,$5,'native-cost','actual','UTC','aggregate','committed',$6,now())`, batch, a.WorkspaceID, aid, object, ledger.Hash(data), preview)
+	_, e := tx.Exec(ctx, `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview,period_start,period_end,sync_run_id,committed_at) VALUES($1,$2,$3,$4,$5,'native-cost','actual','UTC','aggregate','committed',$6,$7,$8,$9,now())`, shard.Batch, a.WorkspaceID, aid, shard.Object, shard.Hash, preview, snapshot.Start, snapshot.End, a.ResourceID)
 	if e != nil {
 		return e
 	}
-	if _, e = ledger.Publish(ctx, tx, a.WorkspaceID, aid, batch, snapshot.Entries); e != nil {
+	if _, e = ledger.Publish(ctx, tx, a.WorkspaceID, aid, shard.Batch, snapshot.Entries); e != nil {
 		return e
 	}
 	// Only a fully fetched shard may withdraw records omitted by a provider correction.
@@ -261,17 +369,24 @@ func (w *Worker) publishShard(ctx context.Context, tx pgx.Tx, a tasks.Args, aid 
 	if _, e = tx.Exec(ctx, `UPDATE cost_entries SET is_current=false WHERE workspace_id=$1 AND account_id=$2 AND source_scope='native-cost' AND cost_kind='actual' AND is_current AND period_start>=$3 AND period_end<=$4 AND NOT(source_record_key=ANY($5))`, a.WorkspaceID, aid, snapshot.Start, snapshot.End, keys); e != nil {
 		return e
 	}
-	usageKeys := []string{}
+	if _, e = tx.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS publish_usage_stage(source_record_key text NOT NULL,period_start timestamptz NOT NULL,period_end timestamptz NOT NULL,model text NOT NULL,metrics jsonb NOT NULL,dimensions jsonb NOT NULL) ON COMMIT DROP; TRUNCATE publish_usage_stage`); e != nil {
+		return e
+	}
+	usageRows := make([][]any, 0, len(snapshot.Usage))
 	for _, u := range snapshot.Usage {
-		usageKeys = append(usageKeys, u.Key)
 		metrics, _ := json.Marshal(u.Metrics)
 		dims, _ := json.Marshal(u.Dimensions)
-		_, e = tx.Exec(ctx, `INSERT INTO usage_buckets(workspace_id,account_id,source_batch_id,source_record_key,period_start,period_end,model,metrics,dimensions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(workspace_id,account_id,source_record_key) DO UPDATE SET source_batch_id=excluded.source_batch_id,metrics=excluded.metrics,dimensions=excluded.dimensions`, a.WorkspaceID, aid, batch, u.Key, u.Start, u.End, u.Model, metrics, dims)
-		if e != nil {
+		usageRows = append(usageRows, []any{u.Key, u.Start, u.End, u.Model, metrics, dims})
+	}
+	if len(usageRows) > 0 {
+		if _, e = tx.CopyFrom(ctx, pgx.Identifier{"publish_usage_stage"}, []string{"source_record_key", "period_start", "period_end", "model", "metrics", "dimensions"}, pgx.CopyFromRows(usageRows)); e != nil {
+			return e
+		}
+		if _, e = tx.Exec(ctx, `INSERT INTO usage_buckets(workspace_id,account_id,source_batch_id,source_record_key,period_start,period_end,model,metrics,dimensions) SELECT $1,$2,$3,source_record_key,period_start,period_end,model,metrics,dimensions FROM publish_usage_stage ON CONFLICT(workspace_id,account_id,source_record_key) DO UPDATE SET source_batch_id=excluded.source_batch_id,period_start=excluded.period_start,period_end=excluded.period_end,model=excluded.model,metrics=excluded.metrics,dimensions=excluded.dimensions`, a.WorkspaceID, aid, shard.Batch); e != nil {
 			return e
 		}
 	}
-	if _, e = tx.Exec(ctx, `DELETE FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND period_start>=$3 AND period_end<=$4 AND NOT(source_record_key=ANY($5))`, a.WorkspaceID, aid, snapshot.Start, snapshot.End, usageKeys); e != nil {
+	if _, e = tx.Exec(ctx, `DELETE FROM usage_buckets u WHERE workspace_id=$1 AND account_id=$2 AND period_start>=$3 AND period_end<=$4 AND NOT EXISTS(SELECT 1 FROM publish_usage_stage s WHERE s.source_record_key=u.source_record_key)`, a.WorkspaceID, aid, snapshot.Start, snapshot.End); e != nil {
 		return e
 	}
 	_, e = tx.Exec(ctx, `INSERT INTO sync_checkpoints(workspace_id,account_id,resource_kind,data_through) VALUES($1,$2,'cost_and_usage',$3) ON CONFLICT(account_id,resource_kind) DO UPDATE SET data_through=greatest(sync_checkpoints.data_through,excluded.data_through)`, a.WorkspaceID, aid, snapshot.End)

@@ -4,7 +4,7 @@ const { scoped, workspace, errorText } = useApi()
 const { date } = useMoney()
 const { data, error, refresh } = await useAsyncData(
   () => `exports-${workspace.value?.id}`,
-  (_app, { signal }) => scoped<any[]>('/exports', { signal }),
+  (_app, { signal }) => scoped<ExportRecord[]>('/exports', { signal }),
 )
 </script>
 <template>

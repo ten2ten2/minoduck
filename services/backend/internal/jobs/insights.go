@@ -20,14 +20,31 @@ func (w *Worker) buildInsights(ctx context.Context, wid string) error {
 		return e
 	}
 	defer tx.Rollback(ctx)
-	var code, status string
+	var account, code, status string
 	var grace *time.Time
-	e = tx.QueryRow(ctx, `SELECT s.plan_code,s.status,s.grace_period_until FROM subscriptions s JOIN workspaces w ON w.billing_account_id=s.billing_account_id WHERE w.id=$1`, wid).Scan(&code, &status, &grace)
+	e = tx.QueryRow(ctx, `SELECT billing_account_id FROM workspaces WHERE id=$1`, wid).Scan(&account)
+	if e != nil {
+		return e
+	}
+	if e = subscriptions.LockAccount(ctx, tx, account); e != nil {
+		return e
+	}
+	var active bool
+	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1 AND billing_account_id=$2 AND deletion_requested_at IS NULL)`, wid, account).Scan(&active); e != nil {
+		return e
+	}
+	if !active {
+		return nil
+	}
+	e = tx.QueryRow(ctx, `SELECT plan_code,status,grace_period_until FROM subscriptions WHERE billing_account_id=$1 FOR UPDATE`, account).Scan(&code, &status, &grace)
 	if e != nil {
 		return e
 	}
 	p := subscriptions.Effective(code, status, grace, time.Now())
-	rows, e := tx.Query(ctx, `SELECT id,kind,coalesce(currency::text,''),coalesce(amount::text,'') FROM alert_rules WHERE workspace_id=$1 AND enabled ORDER BY created_at,id`, wid)
+	if e = subscriptions.ApplyEntitlements(ctx, tx, account, p); e != nil {
+		return e
+	}
+	rows, e := tx.Query(ctx, `SELECT id,kind,coalesce(currency::text,''),coalesce(amount::text,'') FROM alert_rules WHERE workspace_id=$1 AND enabled AND NOT billing_suspended ORDER BY created_at,id`, wid)
 	if e != nil {
 		return e
 	}
@@ -192,7 +209,7 @@ func (w *Worker) insight(ctx context.Context, tx pgx.Tx, wid, key, kind, currenc
 func (w *Worker) notify(ctx context.Context, a tasks.Args) error {
 	var email, locale, kind, state, slug string
 	var payload []byte
-	e := w.DB.QueryRow(ctx, `SELECT n.recipient,n.locale,n.template,n.state,n.payload,w.slug FROM notification_deliveries n JOIN workspaces w ON w.id=n.workspace_id JOIN workspace_members m ON m.workspace_id=w.id JOIN users u ON u.id=m.user_id AND u.email=n.recipient WHERE n.workspace_id=$1 AND n.id=$2 AND m.role='owner' AND w.deletion_requested_at IS NULL`, a.WorkspaceID, a.ResourceID).Scan(&email, &locale, &kind, &state, &payload, &slug)
+	e := w.DB.QueryRow(ctx, `SELECT n.recipient,n.locale,n.template,n.state,n.payload,w.slug FROM notification_deliveries n JOIN workspaces w ON w.id=n.workspace_id WHERE n.workspace_id=$1 AND n.id=$2 AND w.deletion_requested_at IS NULL AND ((n.template='invitation' AND EXISTS(SELECT 1 FROM invitations i WHERE i.id=nullif(n.payload->>'invitation_id','')::uuid AND i.workspace_id=n.workspace_id AND i.email=n.recipient AND i.accepted_at IS NULL AND i.expires_at>now())) OR (n.template<>'invitation' AND EXISTS(SELECT 1 FROM workspace_members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=n.workspace_id AND m.role='owner' AND NOT m.billing_suspended AND u.email=n.recipient)))`, a.WorkspaceID, a.ResourceID).Scan(&email, &locale, &kind, &state, &payload, &slug)
 	if e == pgx.ErrNoRows {
 		return nil
 	}
@@ -201,6 +218,20 @@ func (w *Worker) notify(ctx context.Context, a tasks.Args) error {
 	}
 	if state == "sent" {
 		return nil
+	}
+	if kind == "invitation" {
+		var invitation struct {
+			Subject string `json:"subject"`
+			Body    string `json:"body"`
+		}
+		if e = json.Unmarshal(payload, &invitation); e != nil || invitation.Subject == "" || invitation.Body == "" {
+			return fmt.Errorf("INVALID_NOTIFICATION_PAYLOAD")
+		}
+		if e = platform.SendMail(ctx, w.Config, email, invitation.Subject, invitation.Body, a.ResourceID); e != nil {
+			return e
+		}
+		_, e = w.DB.Exec(ctx, `UPDATE notification_deliveries SET state='sent',sent_at=now() WHERE workspace_id=$1 AND id=$2`, a.WorkspaceID, a.ResourceID)
+		return e
 	}
 	title := map[string]string{"budget": "Budget threshold reached", "spike": "Reported cost increase detected", "sync_failure": "A connection needs attention"}[kind]
 	if locale == "zh-hans" {

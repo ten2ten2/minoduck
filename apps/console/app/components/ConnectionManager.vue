@@ -7,8 +7,8 @@ const { data, error, refresh, status } = await useAsyncData(
   () => `connections-${workspace.value?.id}-${props.id ?? 'all'}`,
   async (_app, { signal }) => {
     const [accounts, providers] = await Promise.all([
-      scoped<any[]>('/connections', { signal }),
-      api<any[]>('/providers', { signal }),
+      scoped<Connection[]>('/connections', { signal }),
+      api<ProviderCapability[]>('/providers', { signal }),
     ])
     return { accounts, providers }
   },
@@ -22,7 +22,7 @@ const adding = ref(false),
   actionError = ref('')
 const form = reactive({ provider: 'openai', name: '', account_ref: '', credential: '' })
 const canEdit = computed(() => workspace.value?.role !== 'viewer')
-async function action(fn: () => Promise<any>, notice = 'common.saved') {
+async function action(fn: () => Promise<unknown>, notice = 'common.saved') {
   busy.value = true
   actionError.value = ''
   try {
@@ -38,7 +38,7 @@ async function action(fn: () => Promise<any>, notice = 'common.saved') {
 }
 async function create() {
   await action(async () => {
-    const a = await scoped('/connections', { method: 'POST', body: { ...form } })
+    const a = await scoped<ApiAction>('/connections', { method: 'POST', body: { ...form } })
     adding.value = false
     await navigateTo(`/w/${workspace.value?.slug}/connections/${a.id}`)
   })
@@ -128,10 +128,7 @@ function cancelAdding() {
           >
             {{ t('connections.sync') }}
           </button>
-          <button
-            v-if="canEdit && selected.provider !== 'csv'"
-            @click="replacing = !replacing"
-          >
+          <button v-if="canEdit && selected.provider !== 'csv'" @click="replacing = !replacing">
             {{ t('connections.replace') }}
           </button>
           <button @click="refresh()">{{ t('common.refresh') }}</button>

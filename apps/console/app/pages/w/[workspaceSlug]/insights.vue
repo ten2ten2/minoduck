@@ -7,7 +7,7 @@ const busy = ref(false),
 const codeError = (code: string) => errorText({ data: { error: { code } } })
 const { data, error, refresh } = await useAsyncData(
   () => `insights-${workspace.value?.id}`,
-  (_app, { signal }) => scoped<any[]>('/insights', { signal }),
+  (_app, { signal }) => scoped<Insight[]>('/insights', { signal }),
 )
 async function update(id: string, state: string) {
   busy.value = true

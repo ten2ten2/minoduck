@@ -2,7 +2,7 @@
 const emit = defineEmits<{ created: [] }>()
 const { t } = useI18n()
 const { scoped, errorText } = useApi()
-const accounts = ref<any[]>([]),
+const accounts = ref<Connection[]>([]),
   busy = ref(false),
   error = ref(''),
   message = ref('')
@@ -16,7 +16,7 @@ const form = reactive({
 })
 async function load() {
   try {
-    accounts.value = await scoped('/connections')
+    accounts.value = await scoped<Connection[]>('/connections')
   } catch (e) {
     error.value = errorText(e)
   }

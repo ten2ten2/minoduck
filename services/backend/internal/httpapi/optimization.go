@@ -62,7 +62,7 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, bad("PRICE_CANDIDATE_NOT_COMPARABLE")
 	}
 	var provider string
-	e := tx.QueryRow(ctx, `SELECT provider FROM provider_accounts WHERE workspace_id=$1 AND id=$2`, wid, in.Account).Scan(&provider)
+	e := tx.QueryRow(ctx, `SELECT provider FROM provider_accounts WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, wid, in.Account).Scan(&provider)
 	if e != nil {
 		return nil, e
 	}
@@ -77,6 +77,14 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, bad("INCOMPLETE_USAGE")
 	}
 	if provider == "anthropic" && baseline.Region == "" {
+		return nil, bad("INCOMPLETE_USAGE")
+	}
+	var boundary bool
+	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND model=$3 AND period_start<$5 AND period_end>$4 AND (period_start<$4 OR period_end>$5) AND coalesce(dimensions->>'service_tier','')=$6 AND coalesce(dimensions->>'region','')=$7 AND coalesce(dimensions->>'endpoint_id','')=$8)`, wid, in.Account, baseline.Model, start, end, baseline.Tier, baseline.Region, baseline.Route).Scan(&boundary)
+	if e != nil {
+		return nil, e
+	}
+	if boundary {
 		return nil, bad("INCOMPLETE_USAGE")
 	}
 	rows, e := tx.Query(ctx, `SELECT id,metrics,dimensions FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND model=$3 AND period_start>=$4 AND period_end<=$5 AND coalesce(dimensions->>'service_tier','')=$6 AND coalesce(dimensions->>'region','')=$7 AND coalesce(dimensions->>'endpoint_id','')=$8`, wid, in.Account, baseline.Model, start, end, baseline.Tier, baseline.Region, baseline.Route)
@@ -102,6 +110,10 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 			return nil, e
 		}
 		if provider == "anthropic" && (dimensions["region"] == "" || dimensions["speed"] != "standard") {
+			rows.Close()
+			return nil, bad("INCOMPLETE_USAGE")
+		}
+		if !textUsageComparable(provider, m, dimensions) {
 			rows.Close()
 			return nil, bad("INCOMPLETE_USAGE")
 		}

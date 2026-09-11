@@ -103,7 +103,17 @@ func (s *Server) reconcile(c *gin.Context, tx pgx.Tx) (any, error) {
 	var start, end time.Time
 	var confirmed bool
 	ctx := c.Request.Context()
-	e := tx.QueryRow(ctx, `SELECT account_id,currency,amount::text,adjustment::text,source_scope,period_start,period_end,coverage_confirmed FROM invoices WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, c.Param("wid"), in.InvoiceID).Scan(&aid, &currency, &billed, &adjustment, &scope, &start, &end, &confirmed)
+	e := tx.QueryRow(ctx, `SELECT account_id FROM invoices WHERE workspace_id=$1 AND id=$2`, c.Param("wid"), in.InvoiceID).Scan(&aid)
+	if e != nil {
+		return nil, e
+	}
+	// Serialize reconciliation with sync publication so all source rows come
+	// from one committed snapshot. Lock the account before the invoice to keep a
+	// single lock order across jobs and requests.
+	if _, e = tx.Exec(ctx, `SELECT id FROM provider_accounts WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, c.Param("wid"), aid); e != nil {
+		return nil, e
+	}
+	e = tx.QueryRow(ctx, `SELECT account_id,currency,amount::text,adjustment::text,source_scope,period_start,period_end,coverage_confirmed FROM invoices WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, c.Param("wid"), in.InvoiceID).Scan(&aid, &currency, &billed, &adjustment, &scope, &start, &end, &confirmed)
 	if e != nil {
 		return nil, e
 	}

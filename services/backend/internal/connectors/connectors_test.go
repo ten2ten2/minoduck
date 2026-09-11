@@ -55,7 +55,7 @@ func TestNativeCostPrecisionAndBYOK(t *testing.T) {
 			}
 			return 200, fmt.Sprintf(`{"data":[{"starting_at":%q,"ending_at":%q,"results":[{"model":"synthetic-model","workspace_id":null,"service_tier":"standard","inference_geo":"us","speed":"standard","uncached_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40},"output_tokens":50}]}],"has_more":false}`, start.Format(time.RFC3339), end.Format(time.RFC3339)), ""
 		})
-		s, e := c.Fetch(context.Background(), "anthropic", "synthetic-key", start, end)
+		s, e := c.Fetch(context.Background(), "anthropic", "synthetic-key", "organization-1", start, end)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -71,9 +71,12 @@ func TestNativeCostPrecisionAndBYOK(t *testing.T) {
 			if r.URL.Query().Get("date") != start.Format("2006-01-02") {
 				t.Fatal("wrong UTC day")
 			}
+			if r.URL.Query().Get("workspace_id") != "workspace-1" {
+				t.Fatal("OpenRouter activity was not scoped to the verified workspace")
+			}
 			return 200, fmt.Sprintf(`{"data":[{"date":%q,"model":"synthetic/model","model_permaslug":"synthetic-v1","endpoint_id":"endpoint-1","provider_name":"synthetic","usage":0.123456789123,"byok_usage_inference":99,"prompt_tokens":100,"completion_tokens":10,"requests":1}]}`, start.Format("2006-01-02")), ""
 		})
-		s, e := c.Fetch(context.Background(), "openrouter", "synthetic-key", start, end)
+		s, e := c.Fetch(context.Background(), "openrouter", "synthetic-key", "workspace-1", start, end)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -89,10 +92,10 @@ func TestProviderFailuresNeverPublishPartialSnapshot(t *testing.T) {
 		status    int
 		code      string
 		permanent bool
-	}{{401, "PROVIDER_INVALID_CREDENTIAL", true}, {403, "PROVIDER_PERMISSION_DENIED", true}, {429, "PROVIDER_RATE_LIMITED", false}, {503, "PROVIDER_UNAVAILABLE", false}} {
+	}{{401, "PROVIDER_INVALID_CREDENTIAL", true}, {403, "PROVIDER_PERMISSION_DENIED", true}, {408, "PROVIDER_UNAVAILABLE", false}, {409, "PROVIDER_UNAVAILABLE", false}, {425, "PROVIDER_UNAVAILABLE", false}, {429, "PROVIDER_RATE_LIMITED", false}, {503, "PROVIDER_UNAVAILABLE", false}} {
 		t.Run(tc.code, func(t *testing.T) {
 			c := fixtureClient(t, func(*http.Request) (int, string, string) { return tc.status, `{"sensitive":"never exposed"}`, "120" })
-			s, e := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+			s, e := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
 			var f Failure
 			if !errors.As(e, &f) || f.Code != tc.code || f.Permanent != tc.permanent || len(s.Entries) != 0 {
 				t.Fatalf("wrong failure: %+v %+v", s, e)
@@ -105,10 +108,64 @@ func TestProviderFailuresNeverPublishPartialSnapshot(t *testing.T) {
 	c := fixtureClient(t, func(r *http.Request) (int, string, string) {
 		return 200, fmt.Sprintf(`{"data":[{"start_time":%d,"end_time":%d,"results":[{"amount":{"value":0.1,"currency":"USD"}}]}],"has_more":true,"next_page":null}`, start.Unix(), end.Unix()), ""
 	})
-	s, e := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+	s, e := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
 	if e == nil || len(s.Entries) != 0 {
 		t.Fatal("partial page treated as complete")
 	}
+}
+func TestProviderIdentityValidation(t *testing.T) {
+	t.Run("anthropic organization", func(t *testing.T) {
+		client := fixtureClient(t, func(r *http.Request) (int, string, string) {
+			if r.URL.Path != "/v1/organizations/me" || r.Header.Get("x-api-key") != "synthetic-key" {
+				t.Fatalf("unexpected identity request: %s", r.URL)
+			}
+			return 200, `{"id":"org_verified","name":"Verified org"}`, ""
+		})
+		identity, err := client.Identity(context.Background(), "anthropic", "synthetic-key", "label-only")
+		if err != nil || !identity.Verified || identity.ID != "org_verified" || identity.Scope != "organization" {
+			t.Fatalf("identity=%+v err=%v", identity, err)
+		}
+	})
+	t.Run("openrouter workspace slug", func(t *testing.T) {
+		client := fixtureClient(t, func(r *http.Request) (int, string, string) {
+			if r.URL.Path != "/api/v1/workspaces" || r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("unexpected identity request: %s", r.URL)
+			}
+			return 200, `{"data":[{"id":"ws_verified","name":"Verified workspace","slug":"finance"}],"total_count":1}`, ""
+		})
+		identity, err := client.Identity(context.Background(), "openrouter", "synthetic-key", "finance")
+		if err != nil || !identity.Verified || identity.ID != "ws_verified" || identity.Scope != "workspace" {
+			t.Fatalf("identity=%+v err=%v", identity, err)
+		}
+	})
+	t.Run("openrouter offset pagination", func(t *testing.T) {
+		calls := 0
+		client := fixtureClient(t, func(r *http.Request) (int, string, string) {
+			calls++
+			if calls == 1 && r.URL.Query().Get("offset") == "0" {
+				return 200, `{"data":[{"id":"ws_first","slug":"first"}],"total_count":2}`, ""
+			}
+			if calls == 2 && r.URL.Query().Get("offset") == "1" {
+				return 200, `{"data":[{"id":"ws_second","slug":"second"}],"total_count":2}`, ""
+			}
+			t.Fatalf("unexpected page request: %s", r.URL)
+			return 500, `{}`, ""
+		})
+		identity, err := client.Identity(context.Background(), "openrouter", "synthetic-key", "second")
+		if err != nil || identity.ID != "ws_second" || calls != 2 {
+			t.Fatalf("identity=%+v calls=%d err=%v", identity, calls, err)
+		}
+	})
+	t.Run("trailing response is rejected", func(t *testing.T) {
+		client := fixtureClient(t, func(*http.Request) (int, string, string) {
+			return 200, `{"id":"org_verified"}{"unexpected":true}`, ""
+		})
+		_, err := client.Identity(context.Background(), "anthropic", "synthetic-key", "")
+		var failure Failure
+		if !errors.As(err, &failure) || failure.Code != "SOURCE_SCHEMA_CHANGED" || !failure.Permanent {
+			t.Fatalf("trailing response accepted: %v", err)
+		}
+	})
 }
 func TestOpenAISeparatesUsageAndCorrectionIdentity(t *testing.T) {
 	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
@@ -120,12 +177,12 @@ func TestOpenAISeparatesUsageAndCorrectionIdentity(t *testing.T) {
 		}
 		return 200, fmt.Sprintf(`{"data":[{"start_time":%d,"end_time":%d,"results":[{"model":"synthetic-model","project_id":"synthetic","input_tokens":100,"input_cached_tokens":20,"output_tokens":10,"num_model_requests":1}]}],"has_more":false}`, start.Unix(), end.Unix()), ""
 	})
-	a, e := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+	a, e := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
 	if e != nil {
 		t.Fatal(e)
 	}
 	amount = "0.2"
-	b, e := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+	b, e := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -155,7 +212,7 @@ func TestUsageValidationRejectsCorruptSnapshots(t *testing.T) {
 				}
 				return 200, tc.body, ""
 			})
-			snapshot, err := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+			snapshot, err := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
 			var failure Failure
 			if !errors.As(err, &failure) || failure.Code != tc.code || !failure.Permanent || len(snapshot.Entries) != 0 || len(snapshot.Usage) != 0 {
 				t.Fatalf("corrupt usage was not rejected atomically: snapshot=%+v error=%+v", snapshot, err)

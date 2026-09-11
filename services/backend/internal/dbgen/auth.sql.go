@@ -39,11 +39,10 @@ func (q *Queries) SessionUser(ctx context.Context, tokenHash string) (SessionUse
 }
 
 const tenantMembership = `-- name: TenantMembership :one
-SELECT m.role, w.billing_account_id
+SELECT m.role, w.billing_account_id, w.billing_suspended
 FROM workspace_members m JOIN workspaces w ON w.id=m.workspace_id
 WHERE m.workspace_id=$1 AND m.user_id=$2
-AND w.deletion_requested_at IS NULL
-FOR SHARE OF w,m
+AND w.deletion_requested_at IS NULL AND NOT m.billing_suspended
 `
 
 type TenantMembershipParams struct {
@@ -54,11 +53,12 @@ type TenantMembershipParams struct {
 type TenantMembershipRow struct {
 	Role             string `json:"role"`
 	BillingAccountID string `json:"billing_account_id"`
+	BillingSuspended bool   `json:"billing_suspended"`
 }
 
 func (q *Queries) TenantMembership(ctx context.Context, arg TenantMembershipParams) (TenantMembershipRow, error) {
 	row := q.db.QueryRow(ctx, tenantMembership, arg.WorkspaceID, arg.UserID)
 	var i TenantMembershipRow
-	err := row.Scan(&i.Role, &i.BillingAccountID)
+	err := row.Scan(&i.Role, &i.BillingAccountID, &i.BillingSuspended)
 	return i, err
 }

@@ -23,12 +23,12 @@ func TestClearPendingCancellation(t *testing.T) {
 		if got := r.Form.Get("cancel_at_period_end"); got != "false" {
 			t.Fatalf("cancel_at_period_end=%q", got)
 		}
-		if !strings.HasPrefix(r.Header.Get("Idempotency-Key"), "resume-") {
+		if r.Header.Get("Idempotency-Key") != "resume-fixture" {
 			t.Fatal("missing resume idempotency key")
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Request: r, Body: io.NopCloser(strings.NewReader(`{"id":"sub_fixture","status":"active"}`))}, nil
 	})})
-	if err := clearPendingCancellation(context.Background(), client, "sub_fixture"); err != nil || !called {
+	if err := clearPendingCancellation(context.Background(), client, "sub_fixture", "resume-fixture"); err != nil || !called {
 		t.Fatalf("clear pending cancellation: %v, called=%v", err, called)
 	}
 }

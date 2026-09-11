@@ -3,9 +3,11 @@ package platform
 import (
 	"encoding/base64"
 	"errors"
+	"net/mail"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -13,6 +15,8 @@ type Config struct {
 	R2Endpoint, R2Bucket, R2AccessKey, R2SecretKey, StorageDir string
 	ResendKey, MailFrom, GoogleID, GoogleSecret                string
 	StripeKey, StripeWebhookSecret, StripePortalConfig         string
+	LegalReleaseApproved, LegalEntityName, LegalContactEmail   string
+	LegalTermsEffectiveDate, LegalPrivacyEffectiveDate         string
 	Prices                                                     map[string]string
 }
 
@@ -52,6 +56,22 @@ func complete(values ...string) (hasAny, hasAll bool) {
 	return hasAny, hasAll
 }
 
+func validLegalRelease(c Config) bool {
+	if c.LegalReleaseApproved != "true" || strings.TrimSpace(c.LegalEntityName) == "" {
+		return false
+	}
+	address, err := mail.ParseAddress(c.LegalContactEmail)
+	if err != nil || address.Address != c.LegalContactEmail {
+		return false
+	}
+	for _, value := range []string{c.LegalTermsEffectiveDate, c.LegalPrivacyEffectiveDate} {
+		if _, err := time.Parse("2006-01-02", value); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (c Config) stripeConfigured() bool {
 	if c.StripeKey == "" || c.StripeWebhookSecret == "" || c.StripePortalConfig == "" {
 		return false
@@ -83,7 +103,7 @@ func Load() (Config, error) {
 		}
 		return d
 	}
-	c := Config{Env: get("APP_ENV", "development"), Port: get("PORT", "8080"), DatabaseURL: os.Getenv("DATABASE_URL"), AppURL: strings.TrimRight(get("APP_URL", "http://localhost:3001"), "/"), BFFToken: os.Getenv("BFF_SERVICE_TOKEN"), MasterKey: os.Getenv("PROVIDER_ENCRYPTION_MASTER_KEY"), KeyID: get("PROVIDER_KEY_ID", "v1"), R2Endpoint: os.Getenv("R2_ENDPOINT"), R2Bucket: os.Getenv("R2_BUCKET"), R2AccessKey: os.Getenv("R2_ACCESS_KEY_ID"), R2SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"), StorageDir: get("STORAGE_DIR", "./tmp/objects"), ResendKey: os.Getenv("RESEND_API_KEY"), MailFrom: os.Getenv("MAIL_FROM"), GoogleID: os.Getenv("GOOGLE_CLIENT_ID"), GoogleSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), StripeKey: os.Getenv("STRIPE_SECRET_KEY"), StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"), StripePortalConfig: os.Getenv("STRIPE_PORTAL_CONFIGURATION"), Prices: map[string]string{}}
+	c := Config{Env: get("APP_ENV", "development"), Port: get("PORT", "8080"), DatabaseURL: os.Getenv("DATABASE_URL"), AppURL: strings.TrimRight(get("APP_URL", "http://localhost:3001"), "/"), BFFToken: os.Getenv("BFF_SERVICE_TOKEN"), MasterKey: os.Getenv("PROVIDER_ENCRYPTION_MASTER_KEY"), KeyID: get("PROVIDER_KEY_ID", "v1"), R2Endpoint: os.Getenv("R2_ENDPOINT"), R2Bucket: os.Getenv("R2_BUCKET"), R2AccessKey: os.Getenv("R2_ACCESS_KEY_ID"), R2SecretKey: os.Getenv("R2_SECRET_ACCESS_KEY"), StorageDir: get("STORAGE_DIR", "./tmp/objects"), ResendKey: os.Getenv("RESEND_API_KEY"), MailFrom: os.Getenv("MAIL_FROM"), GoogleID: os.Getenv("GOOGLE_CLIENT_ID"), GoogleSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), StripeKey: os.Getenv("STRIPE_SECRET_KEY"), StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"), StripePortalConfig: os.Getenv("STRIPE_PORTAL_CONFIGURATION"), LegalReleaseApproved: os.Getenv("LEGAL_RELEASE_APPROVED"), LegalEntityName: os.Getenv("LEGAL_ENTITY_NAME"), LegalContactEmail: os.Getenv("LEGAL_CONTACT_EMAIL"), LegalTermsEffectiveDate: os.Getenv("LEGAL_TERMS_EFFECTIVE_DATE"), LegalPrivacyEffectiveDate: os.Getenv("LEGAL_PRIVACY_EFFECTIVE_DATE"), Prices: map[string]string{}}
 	for _, p := range []string{"starter", "team"} {
 		for _, v := range []struct{ k, env string }{{"month", "MONTHLY"}, {"year", "YEARLY"}} {
 			c.Prices[p+":"+v.k] = os.Getenv("STRIPE_PRICE_" + strings.ToUpper(p) + "_" + v.env)
@@ -115,6 +135,9 @@ func Load() (Config, error) {
 	}
 	if c.hasStripeConfig() && !c.stripeConfigured() {
 		return c, errors.New("Stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
+	}
+	if c.Env == "production" && (strings.HasPrefix(c.StripeKey, "sk_live_") || strings.HasPrefix(c.StripeKey, "rk_live_")) && !validLegalRelease(c) {
+		return c, errors.New("live Stripe requires approved legal entity, contact and Terms/Privacy effective dates")
 	}
 	if c.Env == "production" && (len(c.BFFToken) < 32 || !validMasterKey(c.MasterKey) || c.R2Endpoint == "" || c.ResendKey == "") {
 		return c, errors.New("production secrets, HTTPS, R2 and email configuration required")
