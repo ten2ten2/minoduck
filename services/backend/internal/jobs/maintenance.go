@@ -19,10 +19,11 @@ func (w *Worker) maintenance(ctx context.Context, wid string) error {
 	if e != nil {
 		return e
 	}
-	p := subscriptions.Effective(code, status, grace, time.Now())
-	cutoff := time.Now().UTC().AddDate(0, 0, -p.RetentionDays)
-	hold := retentionGrace != nil && retentionGrace.After(time.Now())
-	if status == "past_due" && grace != nil && grace.AddDate(0, 0, 30).After(time.Now()) {
+	now := time.Now().UTC()
+	p := subscriptions.Effective(code, status, grace, now)
+	cutoff := now.Truncate(24 * time.Hour).AddDate(0, 0, -p.RetentionDays)
+	hold := retentionGrace != nil && retentionGrace.After(now)
+	if status == "past_due" && grace != nil && grace.AddDate(0, 0, 30).After(now) {
 		hold = true
 	}
 	if !hold {
