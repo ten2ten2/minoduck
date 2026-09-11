@@ -11,13 +11,16 @@ const open = ref(false),
   actionError = ref(''),
   editing = ref('')
 const form = reactive({ name: '', kind: 'budget', currency: 'USD', amount: '', enabled: true })
+function resetForm() {
+  Object.assign(form, { name: '', kind: 'budget', currency: 'USD', amount: '', enabled: true })
+}
 function edit(rule: any) {
   editing.value = rule.id
   Object.assign(form, {
     name: rule.name,
     kind: rule.kind,
-    currency: rule.currency,
-    amount: rule.amount,
+    currency: rule.currency ?? 'USD',
+    amount: rule.amount ?? '',
     enabled: rule.enabled,
   })
   open.value = true
@@ -26,12 +29,18 @@ async function save() {
   busy.value = true
   actionError.value = ''
   try {
+    const body = { ...form }
+    if (body.kind === 'sync_failure') {
+      body.currency = ''
+      body.amount = ''
+    }
     await scoped('/alert-rules' + (editing.value ? `/${editing.value}` : ''), {
       method: editing.value ? 'PATCH' : 'POST',
-      body: { ...form },
+      body,
     })
     open.value = false
     editing.value = ''
+    resetForm()
     await refresh()
   } catch (e) {
     actionError.value = errorText(e)
@@ -41,6 +50,7 @@ async function save() {
 }
 async function remove(id: string) {
   busy.value = true
+  actionError.value = ''
   try {
     await scoped(`/alert-rules/${id}`, { method: 'DELETE' })
     await refresh()
@@ -50,15 +60,21 @@ async function remove(id: string) {
     busy.value = false
   }
 }
-function toggleAdding() {
+function startAdding() {
   editing.value = ''
-  open.value = !open.value
+  resetForm()
+  open.value = true
+}
+function closeForm() {
+  open.value = false
+  editing.value = ''
+  resetForm()
 }
 </script>
 <template>
   <div class="stack">
     <PageHeading :title="t('nav.alerts')" :description="t('alerts.subtitle')">
-      <button v-if="workspace?.role !== 'viewer'" class="primary" @click="toggleAdding">
+      <button v-if="workspace?.role !== 'viewer'" class="primary" @click="startAdding">
         {{ t('alerts.add') }}
       </button>
     </PageHeading>
@@ -79,23 +95,23 @@ function toggleAdding() {
             </option>
           </select>
         </label>
-        <label>
+        <label v-if="form.kind !== 'sync_failure'">
           {{ t('common.amount') }}
           <input v-model="form.amount" inputmode="decimal" required />
         </label>
-        <label>
+        <label v-if="form.kind !== 'sync_failure'">
           {{ t('common.currency') }}
           <input v-model="form.currency" pattern="[A-Z]{3}" required />
         </label>
       </div>
-      <p class="muted">{{ t('alerts.amountHelp') }}</p>
+      <p v-if="form.kind !== 'sync_failure'" class="muted">{{ t('alerts.amountHelp') }}</p>
       <label class="check">
         <input v-model="form.enabled" type="checkbox" />
         {{ t('common.enabled') }}
       </label>
       <div class="row">
         <button class="primary" :disabled="busy">{{ t('common.save') }}</button>
-        <button type="button" @click="open = false">{{ t('common.cancel') }}</button>
+        <button type="button" @click="closeForm">{{ t('common.cancel') }}</button>
       </div>
     </form>
     <div v-if="data?.length" class="grid-2">
@@ -104,7 +120,9 @@ function toggleAdding() {
           <h2>{{ rule.name }}</h2>
           <span class="badge">{{ t(`alerts.${rule.kind}`) }}</span>
         </div>
-        <strong class="num">{{ money(rule.amount, rule.currency) }}</strong>
+        <strong v-if="rule.kind !== 'sync_failure'" class="num">
+          {{ money(rule.amount, rule.currency) }}
+        </strong>
         <div v-if="workspace?.role !== 'viewer'" class="row">
           <button @click="edit(rule)">{{ t('common.edit') }}</button>
           <details>
