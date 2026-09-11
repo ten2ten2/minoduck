@@ -27,7 +27,7 @@ func (w *Worker) buildInsights(ctx context.Context, wid string) error {
 		return e
 	}
 	p := subscriptions.Effective(code, status, grace, time.Now())
-	rows, e := tx.Query(ctx, `SELECT id,kind,currency,amount::text FROM alert_rules WHERE workspace_id=$1 AND enabled ORDER BY created_at,id`, wid)
+	rows, e := tx.Query(ctx, `SELECT id,kind,coalesce(currency::text,''),coalesce(amount::text,'') FROM alert_rules WHERE workspace_id=$1 AND enabled ORDER BY created_at,id`, wid)
 	if e != nil {
 		return e
 	}
@@ -135,7 +135,7 @@ func (w *Worker) buildInsights(ctx context.Context, wid string) error {
 			}
 			for _, f := range failures {
 				key := fmt.Sprintf("sync:%s:%d:%s", f.ID, f.Generation, now.Format("2006-01-02"))
-				if e = w.insight(ctx, tx, wid, key, "sync_failure", r.Currency, map[string]any{"account_id": f.ID, "error_code": f.Code}, true); e != nil {
+				if e = w.insight(ctx, tx, wid, key, "sync_failure", "", map[string]any{"account_id": f.ID, "error_code": f.Code}, true); e != nil {
 					return e
 				}
 			}
@@ -149,7 +149,7 @@ func (w *Worker) insight(ctx context.Context, tx pgx.Tx, wid, key, kind, currenc
 		return e
 	}
 	id := uuid.NewString()
-	tag, e := tx.Exec(ctx, `INSERT INTO insights(id,workspace_id,rule_key,kind,currency,evidence) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(workspace_id,rule_key) DO NOTHING`, id, wid, key, kind, currency, data)
+	tag, e := tx.Exec(ctx, `INSERT INTO insights(id,workspace_id,rule_key,kind,currency,evidence) VALUES($1,$2,$3,$4,nullif($5,'')::char(3),$6) ON CONFLICT(workspace_id,rule_key) DO NOTHING`, id, wid, key, kind, currency, data)
 	if e != nil {
 		return e
 	}
