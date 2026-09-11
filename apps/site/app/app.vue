@@ -16,6 +16,11 @@ useHead(() => ({
       hreflang: code === 'zh-hans' ? 'zh-Hans' : code === 'zh-hant' ? 'zh-Hant' : 'en',
       href: config.public.siteUrl + switchLocalePath(code),
     })),
+    {
+      rel: 'alternate' as const,
+      hreflang: 'x-default',
+      href: config.public.siteUrl + switchLocalePath('en'),
+    },
   ],
 }))
 </script>
