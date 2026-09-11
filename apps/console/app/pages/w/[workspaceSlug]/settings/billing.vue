@@ -98,8 +98,21 @@ async function cancel() {
   actionError.value = ''
   try {
     await scoped('/subscription/cancel', { method: 'POST' })
-    notice.value = 'billing.pending'
-    await refresh()
+    if (data.value?.subscription) data.value.subscription.cancel_at_period_end = true
+    notice.value = 'common.saved'
+  } catch (e) {
+    actionError.value = errorText(e)
+  } finally {
+    busy.value = false
+  }
+}
+async function resume() {
+  busy.value = true
+  actionError.value = ''
+  try {
+    await scoped('/subscription/resume', { method: 'POST' })
+    if (data.value?.subscription) data.value.subscription.cancel_at_period_end = false
+    notice.value = 'common.saved'
   } catch (e) {
     actionError.value = errorText(e)
   } finally {
@@ -143,6 +156,16 @@ async function cancel() {
           </span>
           <span class="muted">/ USD {{ data.entitlements.spend_limit }}</span>
         </div>
+        <div v-if="data.subscription.cancel_at_period_end" class="notice warning row between">
+          <span>{{ t('billing.cancelHelp') }}</span>
+          <button
+            v-if="canManage"
+            :disabled="busy || !data.stripe_configured"
+            @click="resume"
+          >
+            {{ t('common.save') }} · {{ t('billing.current') }}
+          </button>
+        </div>
         <div v-if="data.subscription.scheduled_plan" class="notice row between">
           <span>{{ t('billing.scheduled') }} · {{ data.subscription.scheduled_plan }}</span>
           <button
@@ -157,7 +180,7 @@ async function cancel() {
           <button :disabled="busy || !data.stripe_configured" @click="portal">
             {{ t('billing.portal') }}
           </button>
-          <details v-if="data.entitlements.code !== 'free'">
+          <details v-if="data.entitlements.code !== 'free' && !data.subscription.cancel_at_period_end">
             <summary class="danger">{{ t('billing.cancel') }}</summary>
             <p class="muted">{{ t('billing.cancelHelp') }}</p>
             <button class="danger" :disabled="busy" @click="cancel">
