@@ -110,9 +110,17 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	if !locked {
 		return river.JobSnooze(30 * time.Second)
 	}
-	defer lease.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, aid)
-	if _, e = w.DB.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID); e != nil {
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = lease.Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, aid)
+	}()
+	started, e := w.DB.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID)
+	if e != nil {
 		return e
+	}
+	if started.RowsAffected() == 0 {
+		return river.JobCancel(fmt.Errorf("SYNC_CANCELED"))
 	}
 	defer func() {
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -145,6 +153,7 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 		}
 		tx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
 		if e != nil {
+			_ = w.Objects.Delete(ctx, object)
 			return e
 		}
 		e = w.publishShard(ctx, tx, a, aid, generation, batch, object, data, snapshot)
