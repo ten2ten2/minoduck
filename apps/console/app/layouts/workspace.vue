@@ -13,8 +13,9 @@ import {
   LogOut,
   Plus,
 } from '@lucide/vue'
-const { t, setLocale } = useI18n()
+const { t } = useI18n()
 const { user, workspaces, workspace, api, errorText } = useApi()
+const { preferenceError, savePreferences } = useAccountPreferences()
 const route = useRoute()
 const mobileOpen = ref(false)
 const error = ref('')
@@ -35,17 +36,6 @@ const secondary = [
 const active = (path: string) => route.path.includes(`${base.value}/${path}`)
 const selectWorkspace = (event: Event) =>
   navigateTo(`/w/${(event.target as HTMLSelectElement).value}/overview`)
-async function preferences(locale: string, theme: string) {
-  try {
-    if (user.value) {
-      await api('/me/preferences', { method: 'PATCH', body: { locale, theme } })
-      user.value.locale = locale
-      user.value.theme = theme
-    }
-  } catch (e) {
-    error.value = errorText(e)
-  }
-}
 async function signout() {
   try {
     await api('/auth/logout', { method: 'POST' })
@@ -63,12 +53,6 @@ watch(
     mobileOpen.value = false
   },
 )
-onMounted(async () => {
-  if (user.value?.locale_explicit)
-    await setLocale(user.value.locale as 'en' | 'zh-hans' | 'zh-hant')
-  const theme = useCookie('md_theme')
-  if (user.value) theme.value = user.value.theme
-})
 </script>
 <template>
   <div class="console-shell">
@@ -131,10 +115,12 @@ onMounted(async () => {
           <span class="separator">/</span>
           <span class="muted">{{ t('site.eyebrow') }}</span>
         </div>
-        <PreferencesControl @change="preferences" />
+        <PreferencesControl @change="savePreferences" />
       </header>
       <main class="console-main">
-        <div v-if="error" class="notice error" role="alert">{{ error }}</div>
+        <div v-if="error || preferenceError" class="notice error" role="alert">
+          {{ error || preferenceError }}
+        </div>
         <slot />
       </main>
     </div>
