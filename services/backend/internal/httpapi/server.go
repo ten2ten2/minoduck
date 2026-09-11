@@ -13,6 +13,7 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/dbgen"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -202,7 +203,6 @@ func (s *Server) tenant(role string, h tenantHandler) gin.HandlerFunc {
 					s.fail(c, bad("INVALID_ID"))
 					return
 				}
-			}
 		}
 		tx, e := platform.TenantTx(c.Request.Context(), s.DB, wid)
 		if e != nil {
@@ -252,6 +252,9 @@ func bind(c *gin.Context, v any) error {
 	d := json.NewDecoder(c.Request.Body)
 	d.DisallowUnknownFields()
 	if e := d.Decode(v); e != nil {
+		return bad("INVALID_REQUEST")
+	}
+	if e := d.Decode(&struct{}{}); e != io.EOF {
 		return bad("INVALID_REQUEST")
 	}
 	return nil
