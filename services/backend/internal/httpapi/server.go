@@ -51,6 +51,9 @@ func (s *Server) Router() *gin.Engine {
 		c.Header("X-Request-ID", c.GetString("request_id"))
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Cache-Control", "private, no-store")
+		if s.Config.Env == "production" {
+			c.Header("Strict-Transport-Security", "max-age=31536000")
+		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 21*1024*1024)
 		c.Next()
 	})
