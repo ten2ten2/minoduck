@@ -51,6 +51,11 @@ type Preview struct {
 	End      *time.Time        `json:"period_end"`
 }
 
+type periodSpan struct {
+	Start time.Time
+	End   time.Time
+}
+
 func Hash(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
 
 // NaturalKey excludes mutable values. Event reports use the source's stable ID;
@@ -64,6 +69,18 @@ func NaturalKey(e Entry) string {
 	}
 	b, _ := json.Marshal(parts)
 	return Hash(b)
+}
+
+// AggregateDimensionKey identifies the dimensions that may be summed together.
+// Time and amount are intentionally excluded so overlapping aggregate windows can
+// be detected before they silently double-count the same dimensional series.
+func AggregateDimensionKey(e Entry) string {
+	b, _ := json.Marshal([]any{e.Scope, e.Kind, e.Provider, e.Vendor, e.Model, e.Category, e.Currency, e.Project, e.Dimensions})
+	return Hash(b)
+}
+
+func PeriodsOverlap(aStart, aEnd, bStart, bEnd time.Time) bool {
+	return aStart.Before(bEnd) && aEnd.After(bStart)
 }
 
 func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) (Preview, error) {
@@ -107,6 +124,7 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 		}
 	}
 	seen := map[string]bool{}
+	aggregateSpans := map[string][]periodSpan{}
 	for row := 2; ; row++ {
 		fields, e := r.Read()
 		if e == io.EOF {
@@ -180,6 +198,21 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 			reject("DUPLICATE_NATURAL_KEY")
 			continue
 		}
+		if granularity == "aggregate" {
+			dimension := AggregateDimensionKey(entry)
+			overlap := false
+			for _, span := range aggregateSpans[dimension] {
+				if PeriodsOverlap(entry.Start, entry.End, span.Start, span.End) {
+					overlap = true
+					break
+				}
+			}
+			if overlap {
+				reject("OVERLAPPING_AGGREGATE_PERIOD")
+				continue
+			}
+			aggregateSpans[dimension] = append(aggregateSpans[dimension], periodSpan{Start: entry.Start, End: entry.End})
+		}
 		seen[entry.Key] = true
 		p.Entries = append(p.Entries, entry)
 		if len(p.Rows) < 20 {
@@ -190,12 +223,12 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 			total, _ = decimal.NewFromString(old)
 		}
 		p.Totals[entry.Currency] = total.Add(a).String()
-		if p.Start == nil || start.Before(*p.Start) {
-			v := start.UTC()
+		if p.Start == nil || entry.Start.Before(*p.Start) {
+			v := entry.Start
 			p.Start = &v
 		}
-		if p.End == nil || end.After(*p.End) {
-			v := end.UTC()
+		if p.End == nil || entry.End.After(*p.End) {
+			v := entry.End
 			p.End = &v
 		}
 	}
