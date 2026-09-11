@@ -9,7 +9,7 @@ const rules: readonly (readonly [string, RegExp])[] = [
   ],
   [
     'POST',
-    /^\/workspaces\/[a-f0-9-]{36}\/(invitations|deletion-requests|connections|connections\/[a-f0-9-]{36}\/(sync|credentials)|imports|imports\/[a-f0-9-]{36}\/commit|invoices|reconciliation-runs|usage-reconciliation-runs|prices|price-comparisons|alert-rules|exports|subscription\/(checkout|portal|change|cancel))$/,
+    /^\/workspaces\/[a-f0-9-]{36}\/(invitations|deletion-requests|connections|connections\/[a-f0-9-]{36}\/(sync|credentials)|imports|imports\/[a-f0-9-]{36}\/commit|invoices|reconciliation-runs|usage-reconciliation-runs|prices|price-comparisons|alert-rules|exports|subscription\/(checkout|portal|change|cancel|resume))$/,
   ],
   [
     'PATCH',
