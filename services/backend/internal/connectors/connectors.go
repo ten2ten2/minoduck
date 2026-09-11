@@ -166,6 +166,32 @@ func (c Client) Fetch(ctx context.Context, provider, key string, start, end time
 		}
 		seen[v.Key] = true
 	}
+	usageSeen := map[string]bool{}
+	for i := range s.Usage {
+		u := &s.Usage[i]
+		if u.Start.Before(start) || u.End.After(end) || !u.End.After(u.Start) || len(u.Metrics) == 0 {
+			return Snapshot{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+		}
+		hasMetric := false
+		for _, raw := range u.Metrics {
+			if raw == "" {
+				continue
+			}
+			value, parseErr := decimal.NewFromString(string(raw))
+			if parseErr != nil || value.IsNegative() {
+				return Snapshot{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+			}
+			hasMetric = true
+		}
+		if !hasMetric {
+			return Snapshot{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
+		}
+		setUsageKey(u)
+		if usageSeen[u.Key] {
+			return Snapshot{}, Failure{Code: "DUPLICATE_SOURCE_KEY", Permanent: true}
+		}
+		usageSeen[u.Key] = true
+	}
 	return s, nil
 }
 func base(provider, model, amount, currency string, start, end time.Time, d map[string]string) ledger.Entry {
