@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/jackc/pgx/v5"
+	"maps"
 	"time"
 )
 
@@ -22,9 +23,11 @@ func CompleteScope(ctx context.Context, tx pgx.Tx, wid, account, currency, scope
 func Publish(ctx context.Context, tx pgx.Tx, wid, account, batch string, entries []Entry) (int, error) {
 	changed := 0
 	for i, v := range entries {
-		var oldID, amount, coverage string
+		var oldID, amount, coverage, timezone, provider, vendor, model, category, kind, scope, project, currency string
+		var oldStart, oldEnd time.Time
+		var dimensions []byte
 		var revision int
-		e := tx.QueryRow(ctx, `SELECT id,amount::text,coverage_status,revision FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND source_record_key=$3 AND is_current FOR UPDATE`, wid, account, v.Key).Scan(&oldID, &amount, &coverage, &revision)
+		e := tx.QueryRow(ctx, `SELECT id,amount::text,coverage_status,revision,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,currency::text,dimensions FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND source_record_key=$3 AND is_current FOR UPDATE`, wid, account, v.Key).Scan(&oldID, &amount, &coverage, &revision, &oldStart, &oldEnd, &timezone, &provider, &vendor, &model, &category, &kind, &scope, &project, &currency, &dimensions)
 		if e != nil && e != pgx.ErrNoRows {
 			return 0, e
 		}
@@ -34,20 +37,28 @@ func Publish(ctx context.Context, tx pgx.Tx, wid, account, batch string, entries
 			}
 		}
 		if oldID != "" {
-			old, _ := Amount(amount)
-			next, _ := Amount(v.Amount)
-			if old.Equal(next) && coverage == v.Coverage {
+			oldAmount, _ := Amount(amount)
+			nextAmount, _ := Amount(v.Amount)
+			oldDimensions := map[string]string{}
+			if e = json.Unmarshal(dimensions, &oldDimensions); e != nil {
+				return 0, e
+			}
+			if oldAmount.Equal(nextAmount) && coverage == v.Coverage && oldStart.Equal(v.Start) && oldEnd.Equal(v.End) && timezone == v.Timezone && provider == v.Provider && vendor == v.Vendor && model == v.Model && category == v.Category && kind == v.Kind && scope == v.Scope && project == v.Project && currency == v.Currency && maps.Equal(oldDimensions, v.Dimensions) {
 				continue
 			}
 			if _, e = tx.Exec(ctx, `UPDATE cost_entries SET is_current=false WHERE workspace_id=$1 AND id=$2`, wid, oldID); e != nil {
 				return 0, e
 			}
 		}
-		dimensions, _ := json.Marshal(v.Dimensions)
+		dimensions, _ = json.Marshal(v.Dimensions)
 		if v.Dimensions == nil {
 			dimensions = []byte(`{}`)
 		}
-		_, e = tx.Exec(ctx, `INSERT INTO cost_entries(workspace_id,account_id,source_record_key,revision,source_batch_id,source_record_ref,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,amount,currency,coverage_status,dimensions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, wid, account, v.Key, revision+1, batch, jsonRef(i), v.Start, v.End, v.Timezone, v.Provider, v.Vendor, v.Model, v.Category, v.Kind, v.Scope, v.Project, v.Amount, v.Currency, v.Coverage, dimensions)
+		ref := v.SourceRef
+		if ref == "" {
+			ref = jsonRef(i)
+		}
+		_, e = tx.Exec(ctx, `INSERT INTO cost_entries(workspace_id,account_id,source_record_key,revision,source_batch_id,source_record_ref,period_start,period_end,source_timezone,billing_provider,model_vendor,raw_model_name,charge_category,cost_kind,source_scope,provider_project_ref,amount,currency,coverage_status,dimensions) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, wid, account, v.Key, revision+1, batch, ref, v.Start, v.End, v.Timezone, v.Provider, v.Vendor, v.Model, v.Category, v.Kind, v.Scope, v.Project, v.Amount, v.Currency, v.Coverage, dimensions)
 		if e != nil {
 			return 0, e
 		}
