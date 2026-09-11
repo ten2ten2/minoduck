@@ -58,6 +58,11 @@ func run() error {
 		return e
 	}
 	for _, i := range items {
+		// sync_runs is FORCE RLS. Scheduled cross-workspace discovery happens on
+		// non-tenant tables, then each enqueue is scoped before touching it.
+		if _, e = tx.Exec(ctx, `SELECT set_config('app.workspace_id',$1,true)`, i.W); e != nil {
+			return e
+		}
 		if _, e = tasks.EnqueueSync(ctx, tx, q, i.W, i.A); e != nil {
 			return e
 		}
