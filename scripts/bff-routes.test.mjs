@@ -15,6 +15,7 @@ for (const [method, path] of [
   ['GET', `/workspaces/${wid}/exports/${id}/download`],
   ['POST', `/workspaces/${wid}/connections/${id}/credentials`],
   ['POST', `/workspaces/${wid}/subscription/checkout`],
+  ['POST', `/workspaces/${wid}/subscription/resume`],
   ['PATCH', `/workspaces/${wid}/reconciliation-items/${id}`],
   ['DELETE', `/workspaces/${wid}/connections/${id}`],
 ]) {
@@ -29,6 +30,7 @@ for (const [method, path] of [
   ['GET', '//example.com/'],
   ['GET', `/workspaces/not-a-uuid/costs`],
   ['POST', `/workspaces/${wid}/costs`],
+  ['POST', `/workspaces/${wid}/subscription/resume/extra`],
   ['GET', `/workspaces/${wid}/exports/${id}/download/extra`],
   ['PATCH', `/workspaces/${wid}/unknown/${id}`],
   ['DELETE', `/workspaces/${wid}`],
