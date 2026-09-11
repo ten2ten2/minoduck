@@ -41,7 +41,7 @@ async function checkout(plan: string, interval: string) {
   }
 }
 async function change() {
-  if (!selection.value) return
+  if (!selection.value || !canManage.value) return
   if (!data.value?.subscription.has_subscription) {
     await checkout(selection.value.plan, selection.value.interval)
     return
@@ -142,7 +142,13 @@ async function cancel() {
         <p>{{ t('billing.immediate') }}</p>
         <p>{{ t('billing.deferred') }}</p>
         <div class="row">
-          <button class="primary" :disabled="busy" @click="change">{{ t('common.save') }}</button>
+          <button
+            class="primary"
+            :disabled="busy || !canManage || !data.stripe_configured"
+            @click="change"
+          >
+            {{ t('common.save') }}
+          </button>
           <button @click="selection = undefined">{{ t('common.cancel') }}</button>
         </div>
       </article>
