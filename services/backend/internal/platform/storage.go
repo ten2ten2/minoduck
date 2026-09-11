@@ -145,7 +145,12 @@ func (s Objects) request(ctx context.Context, method, key string, q url.Values, 
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+s.Config.R2AccessKey+"/"+scope+", SignedHeaders="+signedHeaders+", Signature="+hex.EncodeToString(hmacBytes(k, toSign)))
 	client := s.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{
+			Timeout: 60 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	res, e := client.Do(req)
 	if e != nil {
