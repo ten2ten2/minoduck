@@ -50,6 +50,39 @@ func TestImportCorrectionKeysAndPrecision(t *testing.T) {
 		t.Fatal("prompt accepted")
 	}
 }
+func TestAggregateCSVRejectsOverlappingSameDimensions(t *testing.T) {
+	csv := "period_start,period_end,model,project,amount,currency,charge_category,coverage\n" +
+		"2026-09-01,2026-10-01,gpt-5,project-a,10,USD,usage,complete\n" +
+		"2026-09-15,2026-10-15,gpt-5,project-a,5,USD,usage,complete\n"
+	p, err := ParseCSV([]byte(csv), "openai", "invoice-report", "UTC", "actual", "aggregate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Count != 2 || p.Rejected != 1 || len(p.Entries) != 1 {
+		t.Fatalf("unexpected preview: count=%d rejected=%d entries=%d", p.Count, p.Rejected, len(p.Entries))
+	}
+	if len(p.Errors) != 1 || p.Errors[0].Code != "OVERLAPPING_AGGREGATE_PERIOD" || p.Errors[0].Row != 3 {
+		t.Fatalf("unexpected overlap error: %+v", p.Errors)
+	}
+}
+func TestAggregateCSVAllowsAdjacentPeriods(t *testing.T) {
+	csv := "period_start,period_end,model,project,amount,currency,charge_category,coverage\n" +
+		"2026-09-01,2026-09-15,gpt-5,project-a,10,USD,usage,complete\n" +
+		"2026-09-15,2026-10-01,gpt-5,project-a,5,USD,usage,complete\n"
+	p, err := ParseCSV([]byte(csv), "openai", "invoice-report", "UTC", "actual", "aggregate")
+	if err != nil || p.Rejected != 0 || len(p.Entries) != 2 {
+		t.Fatalf("adjacent periods rejected: %+v %v", p.Errors, err)
+	}
+}
+func TestAggregateCSVAllowsOverlappingDifferentDimensions(t *testing.T) {
+	csv := "period_start,period_end,model,project,amount,currency,charge_category,coverage\n" +
+		"2026-09-01,2026-10-01,gpt-5,project-a,10,USD,usage,complete\n" +
+		"2026-09-15,2026-10-15,gpt-5,project-b,5,USD,usage,complete\n"
+	p, err := ParseCSV([]byte(csv), "openai", "invoice-report", "UTC", "actual", "aggregate")
+	if err != nil || p.Rejected != 0 || len(p.Entries) != 2 {
+		t.Fatalf("different dimensions rejected: %+v %v", p.Errors, err)
+	}
+}
 func TestEventIdentityUsesStableSourceID(t *testing.T) {
 	a := "period_start,period_end,model,amount,currency,charge_category,project,source_event_id,coverage\n2026-01-01,2026-01-02,model-a,1.25,USD,usage,project-a,event-1,complete\n"
 	b := "period_start,period_end,model,amount,currency,charge_category,project,source_event_id,coverage\n2026-01-02,2026-01-03,model-b,2.50,EUR,fee,project-b,event-1,partial\n"
