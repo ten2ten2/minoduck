@@ -155,11 +155,18 @@ func (s *Server) invite(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e = s.lockAccount(c, tx); e != nil {
 		return nil, e
 	}
+	email := strings.ToLower(a.Address)
+	var member bool
+	if e = tx.QueryRow(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM workspace_members m JOIN users u ON u.id=m.user_id WHERE m.workspace_id=$1 AND u.email=$2)`, c.Param("wid"), email).Scan(&member); e != nil {
+		return nil, e
+	}
+	if member {
+		return nil, APIError{"INVALID_INVITATION", 409}
+	}
 	p, e := s.plan(c, tx)
 	if e != nil {
 		return nil, e
 	}
-	email := strings.ToLower(a.Address)
 	var count int
 	e = tx.QueryRow(c.Request.Context(), `SELECT count(DISTINCT email) FROM (SELECT u.email FROM workspace_members m JOIN users u ON u.id=m.user_id JOIN workspaces w ON w.id=m.workspace_id WHERE w.billing_account_id=$1 UNION SELECT i.email FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE w.billing_account_id=$1 AND i.accepted_at IS NULL AND i.expires_at>now() UNION SELECT $2::text) seats`, c.GetString("billing_account_id"), email).Scan(&count)
 	if e != nil {
