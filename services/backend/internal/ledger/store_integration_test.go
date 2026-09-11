@@ -31,7 +31,7 @@ func TestCompleteUsageUsesRetainedSourceBatches(t *testing.T) {
 	if _, err = db.Exec(ctx, `INSERT INTO users(id,email) VALUES($1,$2); INSERT INTO billing_accounts(id,owner_id) VALUES($3,$1); INSERT INTO workspaces(id,billing_account_id,slug,name) VALUES($4,$3,$5,'Coverage test'); INSERT INTO provider_accounts(id,workspace_id,provider,name,external_account_ref,status,generation) VALUES($6,$4,'openai','Fixture','fixture','ready',1)`, uid, "coverage-"+uuid.NewString()+"@example.test", billingID, wid, "coverage-"+uuid.NewString()[:12], aid); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now().UTC().Truncate(24 * time.Hour).AddDate(0, 0, -14)
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -14)
 	mid, end := start.AddDate(0, 0, 7), start.AddDate(0, 0, 14)
 	insertBatch := func(from, to time.Time) string {
 		t.Helper()
