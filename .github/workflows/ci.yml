@@ -42,7 +42,13 @@ jobs:
       - run: go mod verify
       - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
       - run: git diff --exit-code -- internal/dbgen
-      - run: test -z "$(gofmt -l .)"
+      - name: Check gofmt
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            printf 'Files requiring gofmt:\n%s\n' "$files"
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: go build ./cmd/...
