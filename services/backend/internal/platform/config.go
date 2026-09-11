@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"strings"
@@ -12,6 +13,14 @@ type Config struct {
 	ResendKey, MailFrom, GoogleID, GoogleSecret                string
 	StripeKey, StripeWebhookSecret, StripePortalConfig         string
 	Prices                                                     map[string]string
+}
+
+func validMasterKey(value string) bool {
+	if value == "" {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	return err == nil && len(decoded) == 32
 }
 
 func Load() (Config, error) {
@@ -30,7 +39,10 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" || c.BFFToken == "" {
 		return c, errors.New("DATABASE_URL and BFF_SERVICE_TOKEN are required")
 	}
-	if c.Env == "production" && (!strings.HasPrefix(c.AppURL, "https://") || len(c.BFFToken) < 32 || c.MasterKey == "" || c.R2Endpoint == "" || c.R2Bucket == "" || c.R2AccessKey == "" || c.R2SecretKey == "" || c.ResendKey == "" || c.MailFrom == "") {
+	if c.MasterKey != "" && !validMasterKey(c.MasterKey) {
+		return c, errors.New("PROVIDER_ENCRYPTION_MASTER_KEY must be base64-encoded 32 bytes")
+	}
+	if c.Env == "production" && (!strings.HasPrefix(c.AppURL, "https://") || len(c.BFFToken) < 32 || !validMasterKey(c.MasterKey) || c.R2Endpoint == "" || c.R2Bucket == "" || c.R2AccessKey == "" || c.R2SecretKey == "" || c.ResendKey == "" || c.MailFrom == "") {
 		return c, errors.New("production secrets, HTTPS, R2 and email configuration required")
 	}
 	return c, nil
