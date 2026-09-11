@@ -10,9 +10,10 @@ const email = ref(''),
 const sent = ref(false),
   busy = ref(false)
 const token = ref(String(route.query.token ?? ''))
-if (import.meta.client && token.value) {
+if (import.meta.client && (token.value || route.query.ui_locale !== undefined)) {
   const query = { ...route.query }
   delete query.token
+  delete query.ui_locale
   await navigateTo({ path: '/login', query }, { replace: true })
 }
 async function send() {
