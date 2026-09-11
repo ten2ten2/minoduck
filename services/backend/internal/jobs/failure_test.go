@@ -32,7 +32,7 @@ func TestFailSyncRunFencesGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	worker := Worker{DB: db}
-	start := time.Now().UTC().Truncate(24 * time.Hour).AddDate(0, 0, -1)
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
 	end := start.AddDate(0, 0, 1)
 
 	staleRun := uuid.NewString()
