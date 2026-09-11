@@ -19,6 +19,15 @@ func CompleteScope(ctx context.Context, tx pgx.Tx, wid, account, currency, scope
 	return complete, e
 }
 
+// CompleteUsage verifies that successful native connector runs cover the entire
+// requested interval. A missing usage bucket can legitimately mean zero usage,
+// so successful fetch windows—not row presence—are the coverage evidence.
+func CompleteUsage(ctx context.Context, tx pgx.Tx, wid, account string, start, end time.Time) (bool, error) {
+	var complete bool
+	e := tx.QueryRow(ctx, `SELECT coalesce(range_agg(tstzrange(period_start,period_end,'[)')) @> tstzrange($3,$4,'[)'),false) FROM sync_runs WHERE workspace_id=$1 AND account_id=$2 AND state='succeeded' AND period_start<$4 AND period_end>$3`, wid, account, start, end).Scan(&complete)
+	return complete, e
+}
+
 // Publish runs under an account row lock in the caller's tenant transaction.
 func Publish(ctx context.Context, tx pgx.Tx, wid, account, batch string, entries []Entry) (int, error) {
 	changed := 0
