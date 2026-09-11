@@ -10,7 +10,6 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"io"
 	"strings"
-	"time"
 )
 
 func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -184,5 +183,3 @@ func (s *Server) commitImport(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	return gin.H{"status": "committed", "changed": changed}, platform.Audit(ctx, tx, c.Param("wid"), session(c).UserID, "import.committed", c.Param("iid"), gin.H{"changed": changed, "hash": hash})
 }
-
-var _ = time.Time{}
