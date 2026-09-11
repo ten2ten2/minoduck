@@ -6,12 +6,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
-	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"net/mail"
 	"regexp"
 	"strings"
-	"time"
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,47}$`)
@@ -155,36 +153,46 @@ func (s *Server) invite(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	email := strings.ToLower(a.Address)
 	var count int
-	e = tx.QueryRow(c.Request.Context(), `SELECT count(DISTINCT email) FROM (SELECT u.email FROM workspace_members m JOIN users u ON u.id=m.user_id JOIN workspaces w ON w.id=m.workspace_id WHERE w.billing_account_id=$1 UNION SELECT i.email FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE w.billing_account_id=$1 AND i.accepted_at IS NULL AND i.expires_at>now() UNION SELECT $2::text) seats`, c.GetString("billing_account_id"), strings.ToLower(in.Email)).Scan(&count)
+	e = tx.QueryRow(c.Request.Context(), `SELECT count(DISTINCT email) FROM (SELECT u.email FROM workspace_members m JOIN users u ON u.id=m.user_id JOIN workspaces w ON w.id=m.workspace_id WHERE w.billing_account_id=$1 UNION SELECT i.email FROM invitations i JOIN workspaces w ON w.id=i.workspace_id WHERE w.billing_account_id=$1 AND i.accepted_at IS NULL AND i.expires_at>now() UNION SELECT $2::text) seats`, c.GetString("billing_account_id"), email).Scan(&count)
 	if e != nil {
 		return nil, e
 	}
 	if count > p.Members {
 		return nil, APIError{"MEMBER_LIMIT", 402}
 	}
+	// The account lock serializes invitation changes across workspaces. Rotate
+	// an existing token for this workspace/email so only the latest link works.
+	// If delivery fails, the surrounding transaction rolls this deletion back.
+	if _, e = tx.Exec(c.Request.Context(), `DELETE FROM invitations WHERE workspace_id=$1 AND email=$2 AND accepted_at IS NULL`, c.Param("wid"), email); e != nil {
+		return nil, e
+	}
 	id, token := uuid.NewString(), platform.RandomToken()
-	_, e = tx.Exec(c.Request.Context(), `INSERT INTO invitations(id,workspace_id,email,role,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '7 days')`, id, c.Param("wid"), strings.ToLower(in.Email), in.Role, platform.TokenHash(token))
+	_, e = tx.Exec(c.Request.Context(), `INSERT INTO invitations(id,workspace_id,email,role,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '7 days')`, id, c.Param("wid"), email, in.Role, platform.TokenHash(token))
 	if e != nil {
 		return nil, e
 	}
 	link := s.Config.AppURL + "/invitations/accept?token=" + token
-	if s.Config.Env != "production" && s.Config.ResendKey == "" {
-		return gin.H{"id": id, "development_link": link}, nil
+	audit := func() error {
+		return platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "member.invited", id, gin.H{"role": in.Role})
 	}
-	subject, body := "Your MinoDuck invitation", "Sign in with "+in.Email+", then open this invitation:\n"+link
+	if s.Config.Env != "production" && s.Config.ResendKey == "" {
+		return gin.H{"id": id, "development_link": link}, audit()
+	}
+	subject, body := "Your MinoDuck invitation", "Sign in with "+email+", then open this invitation:\n"+link
 	if session(c).Locale == "zh-hans" {
 		subject = "MinoDuck 邀请"
-		body = "请使用 " + in.Email + " 登录，再打开邀请：\n" + link
+		body = "请使用 " + email + " 登录，再打开邀请：\n" + link
 	}
 	if session(c).Locale == "zh-hant" {
 		subject = "MinoDuck 邀請"
-		body = "請使用 " + in.Email + " 登入，再開啟邀請：\n" + link
+		body = "請使用 " + email + " 登入，再開啟邀請：\n" + link
 	}
-	if e = platform.SendMail(c.Request.Context(), s.Config, in.Email, subject, body, id); e != nil {
+	if e = platform.SendMail(c.Request.Context(), s.Config, email, subject, body, id); e != nil {
 		return nil, APIError{"EMAIL_DELIVERY_FAILED", 503}
 	}
-	return gin.H{"id": id}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "member.invited", id, gin.H{"role": in.Role})
+	return gin.H{"id": id}, audit()
 }
 func (s *Server) acceptInvitation(c *gin.Context) {
 	var in struct {
@@ -281,6 +289,3 @@ func (s *Server) deleteWorkspace(c *gin.Context, tx pgx.Tx) (any, error) {
 	c.Set("response_status", 202)
 	return gin.H{"status": "deletion_scheduled"}, e
 }
-
-var _ = time.Second
-var _ = subscriptions.Plans
