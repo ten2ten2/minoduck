@@ -128,6 +128,7 @@ func (s *Server) Router() *gin.Engine {
 	w.POST("/subscription/portal", s.tenant("owner", s.portal))
 	w.POST("/subscription/change", s.tenant("owner", s.changeSubscription))
 	w.POST("/subscription/cancel", s.tenant("owner", s.cancelSubscription))
+	w.POST("/subscription/resume", s.tenant("owner", s.resumeSubscription))
 	return r
 }
 func (s *Server) serviceIdentity(c *gin.Context) {
