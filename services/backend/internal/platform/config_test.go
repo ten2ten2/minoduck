@@ -5,10 +5,17 @@ import "testing"
 func baseConfigEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("APP_ENV", "development")
+	t.Setenv("APP_URL", "http://localhost:3001")
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("BFF_SERVICE_TOKEN", "local-test-token")
 	for _, key := range []string{
 		"PROVIDER_ENCRYPTION_MASTER_KEY",
+		"R2_ENDPOINT",
+		"R2_BUCKET",
+		"R2_ACCESS_KEY_ID",
+		"R2_SECRET_ACCESS_KEY",
+		"RESEND_API_KEY",
+		"MAIL_FROM",
 		"GOOGLE_CLIENT_ID",
 		"GOOGLE_CLIENT_SECRET",
 		"STRIPE_SECRET_KEY",
@@ -24,20 +31,32 @@ func baseConfigEnv(t *testing.T) {
 }
 
 func TestLoadRejectsPartialExternalConfiguration(t *testing.T) {
-	t.Run("google", func(t *testing.T) {
-		baseConfigEnv(t)
-		t.Setenv("GOOGLE_CLIENT_ID", "client")
-		if _, err := Load(); err == nil {
-			t.Fatal("accepted partial Google configuration")
-		}
-	})
-	t.Run("stripe", func(t *testing.T) {
-		baseConfigEnv(t)
-		t.Setenv("STRIPE_SECRET_KEY", "sk_test_example")
-		if _, err := Load(); err == nil {
-			t.Fatal("accepted partial Stripe configuration")
-		}
-	})
+	for _, tc := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"google", "GOOGLE_CLIENT_ID", "client"},
+		{"stripe", "STRIPE_SECRET_KEY", "sk_test_example"},
+		{"r2", "R2_ENDPOINT", "https://example.r2.cloudflarestorage.com"},
+		{"email", "RESEND_API_KEY", "re_example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseConfigEnv(t)
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("accepted partial %s configuration", tc.name)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnsafeAppURL(t *testing.T) {
+	baseConfigEnv(t)
+	t.Setenv("APP_URL", "http://example.com")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted remote plaintext APP_URL")
+	}
 }
 
 func TestLoadAcceptsCompleteStripeConfiguration(t *testing.T) {
