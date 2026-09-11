@@ -133,3 +133,33 @@ func TestOpenAISeparatesUsageAndCorrectionIdentity(t *testing.T) {
 		t.Fatal("cost identity includes amount or fabricated model")
 	}
 }
+func TestUsageValidationRejectsCorruptSnapshots(t *testing.T) {
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
+	end := start.AddDate(0, 0, 1)
+	cost := fmt.Sprintf(`{"data":[{"start_time":%d,"end_time":%d,"results":[{"amount":{"value":0.1,"currency":"USD"},"line_item":"text","project_id":"synthetic"}]}],"has_more":false}`, start.Unix(), end.Unix())
+	usageResult := func(bucketStart, bucketEnd int64, results string) string {
+		return fmt.Sprintf(`{"data":[{"start_time":%d,"end_time":%d,"results":[%s]}],"has_more":false}`, bucketStart, bucketEnd, results)
+	}
+	valid := `{"model":"synthetic-model","project_id":"synthetic","service_tier":"default","input_tokens":100,"input_cached_tokens":20,"output_tokens":10,"num_model_requests":1}`
+	for _, tc := range []struct {
+		name, body, code string
+	}{
+		{"outside requested window", usageResult(start.AddDate(0, 0, -1).Unix(), start.Unix(), valid), "SOURCE_SCHEMA_CHANGED"},
+		{"duplicate usage identity", usageResult(start.Unix(), end.Unix(), valid+","+valid), "DUPLICATE_SOURCE_KEY"},
+		{"negative usage metric", usageResult(start.Unix(), end.Unix(), `{"model":"synthetic-model","project_id":"synthetic","service_tier":"default","input_tokens":-1,"input_cached_tokens":0,"output_tokens":10,"num_model_requests":1}`), "SOURCE_SCHEMA_CHANGED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fixtureClient(t, func(r *http.Request) (int, string, string) {
+				if strings.Contains(r.URL.Path, "costs") {
+					return 200, cost, ""
+				}
+				return 200, tc.body, ""
+			})
+			snapshot, err := c.Fetch(context.Background(), "openai", "synthetic-key", start, end)
+			var failure Failure
+			if !errors.As(err, &failure) || failure.Code != tc.code || !failure.Permanent || len(snapshot.Entries) != 0 || len(snapshot.Usage) != 0 {
+				t.Fatalf("corrupt usage was not rejected atomically: snapshot=%+v error=%+v", snapshot, err)
+			}
+		})
+	}
+}
