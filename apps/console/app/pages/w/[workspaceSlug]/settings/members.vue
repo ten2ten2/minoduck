@@ -12,6 +12,8 @@ const open = ref(false),
   actionError = ref(''),
   message = ref(''),
   devLink = ref('')
+const canRemove = (member: any) =>
+  member.role !== 'owner' && (workspace.value?.role === 'owner' || member.role === 'viewer')
 async function invite() {
   busy.value = true
   actionError.value = ''
@@ -31,6 +33,7 @@ async function invite() {
 }
 async function remove(id: string) {
   busy.value = true
+  actionError.value = ''
   try {
     await scoped(`/members/${id}`, { method: 'DELETE' })
     await refresh()
@@ -86,7 +89,7 @@ async function remove(id: string) {
             <td>{{ member.email }}</td>
             <td>{{ t(`common.${member.role}`) }}</td>
             <td>
-              <details v-if="member.role !== 'owner' && workspace?.role !== 'viewer'">
+              <details v-if="canRemove(member)">
                 <summary class="danger">{{ t('settings.remove') }}</summary>
                 <button class="danger" :disabled="busy" @click="remove(member.id)">
                   {{ t('common.delete') }} · {{ member.email }}
