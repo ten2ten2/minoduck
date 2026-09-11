@@ -45,7 +45,8 @@ func (s *Server) createWorkspace(c *gin.Context) {
 		s.fail(c, e)
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 100 || !slugPattern.MatchString(in.Slug) {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" || len(in.Name) > 100 || !slugPattern.MatchString(in.Slug) {
 		s.fail(c, bad("INVALID_WORKSPACE"))
 		return
 	}
@@ -68,6 +69,10 @@ func (s *Server) createWorkspace(c *gin.Context) {
 		return
 	}
 	c.Set("billing_account_id", account)
+	if e = s.lockAccount(c, tx); e != nil {
+		s.fail(c, e)
+		return
+	}
 	p, e := s.plan(c, tx)
 	if e != nil {
 		s.fail(c, e)
@@ -115,7 +120,8 @@ func (s *Server) updateWorkspace(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := bind(c, &in); e != nil {
 		return nil, e
 	}
-	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 100 {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" || len(in.Name) > 100 {
 		return nil, bad("INVALID_WORKSPACE")
 	}
 	_, e := tx.Exec(c.Request.Context(), `UPDATE workspaces SET name=$1 WHERE id=$2`, in.Name, c.Param("wid"))
