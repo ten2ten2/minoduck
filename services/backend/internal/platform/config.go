@@ -3,6 +3,7 @@ package platform
 import (
 	"encoding/base64"
 	"errors"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -21,6 +22,29 @@ func validMasterKey(value string) bool {
 	}
 	decoded, err := base64.StdEncoding.DecodeString(value)
 	return err == nil && len(decoded) == 32
+}
+
+func validAppURL(value string, production bool) bool {
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	if production {
+		return u.Scheme == "https"
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))
+}
+
+func complete(values ...string) (hasAny, hasAll bool) {
+	hasAll = true
+	for _, value := range values {
+		if value != "" {
+			hasAny = true
+		} else {
+			hasAll = false
+		}
+	}
+	return hasAny, hasAll
 }
 
 func (c Config) stripeConfigured() bool {
@@ -63,16 +87,25 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" || c.BFFToken == "" {
 		return c, errors.New("DATABASE_URL and BFF_SERVICE_TOKEN are required")
 	}
+	if !validAppURL(c.AppURL, c.Env == "production") {
+		return c, errors.New("APP_URL must be HTTPS, or localhost HTTP in development")
+	}
 	if c.MasterKey != "" && !validMasterKey(c.MasterKey) {
 		return c, errors.New("PROVIDER_ENCRYPTION_MASTER_KEY must be base64-encoded 32 bytes")
 	}
-	if (c.GoogleID == "") != (c.GoogleSecret == "") {
+	if has, all := complete(c.GoogleID, c.GoogleSecret); has && !all {
 		return c, errors.New("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together")
+	}
+	if has, all := complete(c.ResendKey, c.MailFrom); has && !all {
+		return c, errors.New("RESEND_API_KEY and MAIL_FROM must be configured together")
+	}
+	if has, all := complete(c.R2Endpoint, c.R2Bucket, c.R2AccessKey, c.R2SecretKey); has && !all {
+		return c, errors.New("R2 endpoint, bucket, access key and secret key must be configured together")
 	}
 	if c.hasStripeConfig() && !c.stripeConfigured() {
 		return c, errors.New("Stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
 	}
-	if c.Env == "production" && (!strings.HasPrefix(c.AppURL, "https://") || len(c.BFFToken) < 32 || !validMasterKey(c.MasterKey) || c.R2Endpoint == "" || c.R2Bucket == "" || c.R2AccessKey == "" || c.R2SecretKey == "" || c.ResendKey == "" || c.MailFrom == "") {
+	if c.Env == "production" && (len(c.BFFToken) < 32 || !validMasterKey(c.MasterKey) || c.R2Endpoint == "" || c.ResendKey == "") {
 		return c, errors.New("production secrets, HTTPS, R2 and email configuration required")
 	}
 	return c, nil
