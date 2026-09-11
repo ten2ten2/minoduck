@@ -24,14 +24,27 @@ type alertInput struct {
 }
 
 func validateAlert(v alertInput) error {
+	if strings.TrimSpace(v.Name) == "" || len(strings.TrimSpace(v.Name)) > 100 || (v.Kind != "budget" && v.Kind != "spike" && v.Kind != "sync_failure") {
+		return bad("INVALID_ALERT")
+	}
+	if v.Kind == "sync_failure" {
+		return nil
+	}
 	a, e := ledger.Amount(v.Amount)
 	if e != nil || !a.IsPositive() {
 		return bad("INVALID_AMOUNT")
 	}
-	if strings.TrimSpace(v.Name) == "" || len(v.Name) > 100 || !ledger.ValidCurrency(v.Currency) || (v.Kind != "budget" && v.Kind != "spike" && v.Kind != "sync_failure") {
+	if !ledger.ValidCurrency(v.Currency) {
 		return bad("INVALID_ALERT")
 	}
 	return nil
+}
+func normalizeAlert(v *alertInput) {
+	v.Name = strings.TrimSpace(v.Name)
+	if v.Kind == "sync_failure" {
+		v.Currency = ""
+		v.Amount = ""
+	}
 }
 func (s *Server) createAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	var in alertInput
@@ -41,6 +54,7 @@ func (s *Server) createAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := validateAlert(in); e != nil {
 		return nil, e
 	}
+	normalizeAlert(&in)
 	if e := s.lockAccount(c, tx); e != nil {
 		return nil, e
 	}
@@ -60,7 +74,7 @@ func (s *Server) createAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, APIError{"BUDGET_LIMIT", 402}
 	}
 	id := uuid.NewString()
-	_, e = tx.Exec(c.Request.Context(), `INSERT INTO alert_rules(id,workspace_id,name,kind,currency,amount,enabled) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, c.Param("wid"), in.Name, in.Kind, in.Currency, in.Amount, in.Enabled)
+	_, e = tx.Exec(c.Request.Context(), `INSERT INTO alert_rules(id,workspace_id,name,kind,currency,amount,enabled) VALUES($1,$2,$3,$4,nullif($5,'')::char(3),nullif($6,'')::numeric,$7)`, id, c.Param("wid"), in.Name, in.Kind, in.Currency, in.Amount, in.Enabled)
 	if e != nil {
 		return nil, e
 	}
@@ -68,7 +82,7 @@ func (s *Server) createAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	c.Set("response_status", 201)
-	return gin.H{"id": id}, nil
+	return gin.H{"id": id}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "alert.created", id, gin.H{"kind": in.Kind})
 }
 func (s *Server) updateAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	var in alertInput
@@ -78,19 +92,20 @@ func (s *Server) updateAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := validateAlert(in); e != nil {
 		return nil, e
 	}
+	normalizeAlert(&in)
 	if in.Kind != "budget" {
 		if e := s.paid(c, tx); e != nil {
 			return nil, e
 		}
 	}
-	r, e := tx.Exec(c.Request.Context(), `UPDATE alert_rules SET name=$1,kind=$2,currency=$3,amount=$4,enabled=$5 WHERE workspace_id=$6 AND id=$7`, in.Name, in.Kind, in.Currency, in.Amount, in.Enabled, c.Param("wid"), c.Param("aid"))
+	r, e := tx.Exec(c.Request.Context(), `UPDATE alert_rules SET name=$1,kind=$2,currency=nullif($3,'')::char(3),amount=nullif($4,'')::numeric,enabled=$5 WHERE workspace_id=$6 AND id=$7`, in.Name, in.Kind, in.Currency, in.Amount, in.Enabled, c.Param("wid"), c.Param("aid"))
 	if e != nil {
 		return nil, e
 	}
 	if r.RowsAffected() == 0 {
 		return nil, pgx.ErrNoRows
 	}
-	return gin.H{"status": "saved"}, nil
+	return gin.H{"status": "saved"}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "alert.updated", c.Param("aid"), gin.H{"kind": in.Kind})
 }
 func (s *Server) deleteAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	r, e := tx.Exec(c.Request.Context(), `DELETE FROM alert_rules WHERE workspace_id=$1 AND id=$2`, c.Param("wid"), c.Param("aid"))
@@ -100,7 +115,7 @@ func (s *Server) deleteAlert(c *gin.Context, tx pgx.Tx) (any, error) {
 	if r.RowsAffected() == 0 {
 		return nil, pgx.ErrNoRows
 	}
-	return gin.H{"status": "deleted"}, nil
+	return gin.H{"status": "deleted"}, platform.Audit(c.Request.Context(), tx, c.Param("wid"), session(c).UserID, "alert.deleted", c.Param("aid"), gin.H{})
 }
 func (s *Server) insights(c *gin.Context, tx pgx.Tx) (any, error) {
 	p, e := s.plan(c, tx)
