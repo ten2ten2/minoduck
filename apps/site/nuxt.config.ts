@@ -64,4 +64,16 @@ export default defineNuxtConfig({
       ],
     },
   },
+  routeRules: {
+    '/**': {
+      headers: {
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+        'Strict-Transport-Security': 'max-age=31536000',
+      },
+    },
+  },
 })
