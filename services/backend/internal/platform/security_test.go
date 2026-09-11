@@ -8,6 +8,9 @@ import (
 
 func TestCredentialBoundToWorkspaceAndConnection(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	if !validMasterKey(key) || validMasterKey("not-a-key") || validMasterKey("") {
+		t.Fatal("master key validation failed")
+	}
 	cipher, e := Encrypt(key, "synthetic-provider-key", "workspace-a:account-a")
 	if e != nil {
 		t.Fatal(e)
