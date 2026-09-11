@@ -30,6 +30,14 @@ func baseConfigEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownEnvironment(t *testing.T) {
+	baseConfigEnv(t)
+	t.Setenv("APP_ENV", "prod")
+	if _, err := Load(); err == nil {
+		t.Fatal("accepted unknown APP_ENV")
+	}
+}
+
 func TestLoadRejectsPartialExternalConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
