@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,28 +24,46 @@ func fixtureClient(t *testing.T, handler func(*http.Request) (int, string, strin
 		return &http.Response{StatusCode: code, Header: h, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})}}
 }
+
+func TestProviderScalarNormalizesScientificNotation(t *testing.T) {
+	var value Scalar
+	if err := json.Unmarshal([]byte(`1e-7`), &value); err != nil || value != "0.0000001" {
+		t.Fatalf("scientific provider decimal not normalized: %q %v", value, err)
+	}
+	if err := json.Unmarshal([]byte(`1e20`), &value); err == nil {
+		t.Fatal("provider amount outside ledger precision was accepted")
+	}
+}
+
 func TestNativeCostPrecisionAndBYOK(t *testing.T) {
 	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, -1)
 	end := start.AddDate(0, 0, 1)
-	t.Run("anthropic cents and cache classes", func(t *testing.T) {
+	t.Run("anthropic cents and pricing dimensions", func(t *testing.T) {
 		c := fixtureClient(t, func(r *http.Request) (int, string, string) {
 			if r.Host != "api.anthropic.com" || r.Header.Get("x-api-key") != "synthetic-key" {
 				t.Fatal("wrong destination or authentication")
 			}
 			if strings.Contains(r.URL.Path, "cost_report") {
-				return 200, fmt.Sprintf(`{"data":[{"starting_at":%q,"ending_at":%q,"results":[{"amount":"12.3456789123","currency":"USD","description":"text","workspace_id":null}]}],"has_more":false}`, start.Format(time.RFC3339), end.Format(time.RFC3339)), ""
+				return 200, fmt.Sprintf(`{"data":[{"starting_at":%q,"ending_at":%q,"results":[{"amount":"12.3456789123","currency":"USD","description":"text","workspace_id":null,"inference_geo":"us","service_tier":"standard","cost_type":"tokens","token_type":"uncached_input_tokens"}]}],"has_more":false}`, start.Format(time.RFC3339), end.Format(time.RFC3339)), ""
 			}
-			return 200, fmt.Sprintf(`{"data":[{"starting_at":%q,"ending_at":%q,"results":[{"model":"synthetic-model","uncached_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40},"output_tokens":50}]}],"has_more":false}`, start.Format(time.RFC3339), end.Format(time.RFC3339)), ""
+			if r.Header.Get("anthropic-beta") != "fast-mode-2026-02-01" {
+				t.Fatal("fast-mode dimension requested without beta header")
+			}
+			groups := strings.Join(r.URL.Query()["group_by[]"], ",")
+			if !strings.Contains(groups, "inference_geo") || !strings.Contains(groups, "speed") {
+				t.Fatal("pricing dimensions missing from usage grouping", groups)
+			}
+			return 200, fmt.Sprintf(`{"data":[{"starting_at":%q,"ending_at":%q,"results":[{"model":"synthetic-model","workspace_id":null,"service_tier":"standard","inference_geo":"us","speed":"standard","uncached_input_tokens":100,"cache_read_input_tokens":200,"cache_creation":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40},"output_tokens":50}]}],"has_more":false}`, start.Format(time.RFC3339), end.Format(time.RFC3339)), ""
 		})
 		s, e := c.Fetch(context.Background(), "anthropic", "synthetic-key", start, end)
 		if e != nil {
 			t.Fatal(e)
 		}
-		if len(s.Entries) != 1 || s.Entries[0].Amount != "0.123456789123" {
-			t.Fatalf("cent conversion lost precision: %+v", s)
+		if len(s.Entries) != 1 || s.Entries[0].Amount != "0.123456789123" || s.Entries[0].Dimensions["inference_geo"] != "us" {
+			t.Fatalf("Anthropic cost dimensions or precision lost: %+v", s)
 		}
-		if s.Usage[0].Metrics["cache_write_1h"] != "40" || s.Usage[0].Metrics["input_uncached"] != "100" {
-			t.Fatal("cache classes lost")
+		if s.Usage[0].Metrics["cache_write_1h"] != "40" || s.Usage[0].Metrics["input_uncached"] != "100" || s.Usage[0].Dimensions["region"] != "us" || s.Usage[0].Dimensions["speed"] != "standard" {
+			t.Fatal("Anthropic usage pricing dimensions lost", s.Usage[0])
 		}
 	})
 	t.Run("openrouter excludes BYOK mirror", func(t *testing.T) {
