@@ -51,10 +51,10 @@ func TestScheduleDurationFollowsDestinationInterval(t *testing.T) {
 
 func TestSubscriptionChangeMode(t *testing.T) {
 	tests := []struct {
-		name                                      string
+		name                                       string
 		fromPlan, fromInterval, toPlan, toInterval string
-		hasSchedule                               bool
-		want                                      string
+		hasSchedule                                bool
+		want                                       string
 	}{
 		{"same without schedule", "team", "month", "team", "month", false, "unchanged"},
 		{"same cancels schedule", "team", "month", "team", "month", true, "cancel_scheduled"},
