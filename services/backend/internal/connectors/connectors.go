@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/shopspring/decimal"
 	"github.com/ten2ten2/minoduck/services/backend/internal/ledger"
 	"io"
 	"net/http"
@@ -28,18 +29,23 @@ func (s *Scalar) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
 		return fmt.Errorf("SOURCE_SCHEMA_CHANGED")
 	}
-	var v string
+	var raw string
 	if len(b) > 0 && b[0] == '"' {
-		if e := json.Unmarshal(b, &v); e != nil {
+		if e := json.Unmarshal(b, &raw); e != nil {
 			return e
 		}
 	} else {
-		v = string(b)
+		raw = string(b)
 	}
-	if _, e := ledger.Amount(v); e != nil {
+	value, e := decimal.NewFromString(raw)
+	if e != nil {
 		return e
 	}
-	*s = Scalar(v)
+	normalized := value.String()
+	if _, e = ledger.Amount(normalized); e != nil {
+		return e
+	}
+	*s = Scalar(normalized)
 	return nil
 }
 
@@ -73,6 +79,9 @@ func (c Client) get(ctx context.Context, provider, key, path string, query url.V
 	if provider == "anthropic" {
 		req.Header.Set("x-api-key", key)
 		req.Header.Set("anthropic-version", "2023-06-01")
+		if path == "/v1/organizations/usage_report/messages" {
+			req.Header.Set("anthropic-beta", "fast-mode-2026-02-01")
+		}
 	} else {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -124,7 +133,7 @@ func (c Client) get(ctx context.Context, provider, key, path string, query url.V
 	return nil
 }
 func (c Client) Fetch(ctx context.Context, provider, key string, start, end time.Time) (Snapshot, error) {
-	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: "2026-09-10.1"}
+	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: "2026-09-11.1"}
 	if !end.After(start) || end.After(time.Now().UTC().Truncate(24*time.Hour)) {
 		return s, Failure{Code: "INVALID_SYNC_WINDOW", Permanent: true}
 	}
@@ -273,11 +282,16 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 				Start   time.Time `json:"starting_at"`
 				End     time.Time `json:"ending_at"`
 				Results []struct {
-					Amount      *Scalar `json:"amount"`
-					Currency    string  `json:"currency"`
-					Description string  `json:"description"`
-					Model       *string `json:"model"`
-					Workspace   *string `json:"workspace_id"`
+					Amount        *Scalar `json:"amount"`
+					Currency      string  `json:"currency"`
+					Description   string  `json:"description"`
+					Model         *string `json:"model"`
+					Workspace     *string `json:"workspace_id"`
+					Geo           string  `json:"inference_geo"`
+					Tier          string  `json:"service_tier"`
+					ContextWindow string  `json:"context_window"`
+					CostType      string  `json:"cost_type"`
+					TokenType     string  `json:"token_type"`
 				} `json:"results"`
 			} `json:"data"`
 			More bool    `json:"has_more"`
@@ -298,7 +312,11 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 				if e != nil {
 					return e
 				}
-				d := map[string]string{"description": r.Description, "workspace_id": nullable(r.Workspace), "known_exclusion": "priority_tier"}
+				d := map[string]string{
+					"description": r.Description, "workspace_id": nullable(r.Workspace),
+					"inference_geo": r.Geo, "service_tier": r.Tier, "context_window": r.ContextWindow,
+					"cost_type": r.CostType, "token_type": r.TokenType, "known_exclusion": "priority_tier",
+				}
 				v := base("anthropic", nullable(r.Model), amount, r.Currency, b.Start, b.End, d)
 				v.Vendor = "anthropic"
 				v.Project = nullable(r.Workspace)
@@ -315,7 +333,7 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 		q.Set("page", *page.Next)
 	}
 	q.Del("page")
-	q["group_by[]"] = []string{"model", "workspace_id", "service_tier"}
+	q["group_by[]"] = []string{"model", "workspace_id", "service_tier", "inference_geo", "speed"}
 	seen = map[string]bool{}
 	for {
 		var page struct {
@@ -326,6 +344,8 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 					Model     string  `json:"model"`
 					Workspace *string `json:"workspace_id"`
 					Tier      string  `json:"service_tier"`
+					Geo       string  `json:"inference_geo"`
+					Speed     string  `json:"speed"`
 					Input     Scalar  `json:"uncached_input_tokens"`
 					Read      Scalar  `json:"cache_read_input_tokens"`
 					Output    Scalar  `json:"output_tokens"`
@@ -346,7 +366,8 @@ func (c Client) anthropic(ctx context.Context, key string, s *Snapshot) error {
 		}
 		for _, b := range page.Data {
 			for _, r := range b.Results {
-				u := Usage{Start: b.Start, End: b.End, Model: r.Model, Dimensions: map[string]string{"workspace_id": nullable(r.Workspace), "service_tier": r.Tier}, Metrics: map[string]Scalar{"input_uncached": r.Input, "cache_read": r.Read, "cache_write_5m": r.Creation.Five, "cache_write_1h": r.Creation.Hour, "output": r.Output}}
+				d := map[string]string{"workspace_id": nullable(r.Workspace), "service_tier": r.Tier, "region": r.Geo, "inference_geo": r.Geo, "speed": r.Speed}
+				u := Usage{Start: b.Start, End: b.End, Model: r.Model, Dimensions: d, Metrics: map[string]Scalar{"input_uncached": r.Input, "cache_read": r.Read, "cache_write_5m": r.Creation.Five, "cache_write_1h": r.Creation.Hour, "output": r.Output}}
 				setUsageKey(&u)
 				s.Usage = append(s.Usage, u)
 			}
