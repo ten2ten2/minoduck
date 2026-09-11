@@ -5,6 +5,14 @@ export default {
     url.hostname = 'www.minoduck.ai'
     url.protocol = 'https:'
     url.port = ''
-    return Response.redirect(url.toString(), 308)
+    return new Response(null, {
+      status: 308,
+      headers: {
+        Location: url.toString(),
+        'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'strict-origin-when-cross-origin',
+      },
+    })
   },
 }
