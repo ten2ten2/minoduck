@@ -129,7 +129,7 @@ function cancelAdding() {
             {{ t('connections.sync') }}
           </button>
           <button
-            v-if="canEdit && selected.provider !== 'csv' && selected.status !== 'disconnected'"
+            v-if="canEdit && selected.provider !== 'csv'"
             @click="replacing = !replacing"
           >
             {{ t('connections.replace') }}
@@ -151,7 +151,13 @@ function cancelAdding() {
         >
           <label>
             {{ t('connections.credential') }}
-            <input v-model="form.credential" type="password" autocomplete="off" required />
+            <input
+              v-model="form.credential"
+              type="password"
+              autocomplete="off"
+              required
+              maxlength="4096"
+            />
           </label>
           <button :disabled="busy">{{ t('common.save') }}</button>
         </form>
