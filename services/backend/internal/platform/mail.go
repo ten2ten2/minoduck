@@ -21,12 +21,18 @@ func SendMail(ctx context.Context, c Config, to, subject, body, key string) erro
 	req.Header.Set("Authorization", "Bearer "+c.ResendKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", key)
-	res, e := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	res, e := client.Do(req)
 	if e != nil {
 		return fmt.Errorf("EMAIL_DELIVERY_FAILED")
 	}
 	defer res.Body.Close()
-	if res.StatusCode >= 300 {
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("EMAIL_DELIVERY_FAILED")
 	}
 	return nil
