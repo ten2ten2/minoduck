@@ -47,6 +47,7 @@ async function change() {
     return
   }
   busy.value = true
+  actionError.value = ''
   try {
     const out = await scoped('/subscription/change', {
       method: 'POST',
@@ -61,8 +62,28 @@ async function change() {
     busy.value = false
   }
 }
+async function cancelScheduled() {
+  const plan = data.value?.subscription.plan_code
+  const interval = data.value?.subscription.billing_interval
+  if (!canManage.value || !plan || (interval !== 'month' && interval !== 'year')) return
+  busy.value = true
+  actionError.value = ''
+  try {
+    const out = await scoped('/subscription/change', {
+      method: 'POST',
+      body: { plan, billing_interval: interval },
+    })
+    notice.value = out.status === 'schedule_canceled' ? 'common.saved' : 'billing.pending'
+    await refresh()
+  } catch (e) {
+    actionError.value = errorText(e)
+  } finally {
+    busy.value = false
+  }
+}
 async function portal() {
   busy.value = true
+  actionError.value = ''
   try {
     const out = await scoped('/subscription/portal', { method: 'POST' })
     await navigateTo(out.url, { external: true })
@@ -74,6 +95,7 @@ async function portal() {
 }
 async function cancel() {
   busy.value = true
+  actionError.value = ''
   try {
     await scoped('/subscription/cancel', { method: 'POST' })
     notice.value = 'billing.pending'
@@ -121,9 +143,16 @@ async function cancel() {
           </span>
           <span class="muted">/ USD {{ data.entitlements.spend_limit }}</span>
         </div>
-        <p v-if="data.subscription.scheduled_plan" class="notice">
-          {{ t('billing.scheduled') }} · {{ data.subscription.scheduled_plan }}
-        </p>
+        <div v-if="data.subscription.scheduled_plan" class="notice row between">
+          <span>{{ t('billing.scheduled') }} · {{ data.subscription.scheduled_plan }}</span>
+          <button
+            v-if="canManage"
+            :disabled="busy || !data.stripe_configured"
+            @click="cancelScheduled"
+          >
+            {{ t('common.cancel') }}
+          </button>
+        </div>
         <div v-if="canManage" class="row">
           <button :disabled="busy || !data.stripe_configured" @click="portal">
             {{ t('billing.portal') }}
