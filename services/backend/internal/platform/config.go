@@ -35,6 +35,11 @@ func validAppURL(value string, production bool) bool {
 	return u.Scheme == "https" || (u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))
 }
 
+func validR2Endpoint(value string) bool {
+	u, err := url.Parse(value)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Path == "" || u.Path == "/")
+}
+
 func complete(values ...string) (hasAny, hasAll bool) {
 	hasAll = true
 	for _, value := range values {
@@ -104,6 +109,9 @@ func Load() (Config, error) {
 	}
 	if has, all := complete(c.R2Endpoint, c.R2Bucket, c.R2AccessKey, c.R2SecretKey); has && !all {
 		return c, errors.New("R2 endpoint, bucket, access key and secret key must be configured together")
+	}
+	if c.R2Endpoint != "" && !validR2Endpoint(c.R2Endpoint) {
+		return c, errors.New("R2_ENDPOINT must be an HTTPS origin without path, query or credentials")
 	}
 	if c.hasStripeConfig() && !c.stripeConfigured() {
 		return c, errors.New("Stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
