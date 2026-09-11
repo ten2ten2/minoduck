@@ -49,6 +49,32 @@ func TestScheduleDurationFollowsDestinationInterval(t *testing.T) {
 	}
 }
 
+func TestSubscriptionChangeMode(t *testing.T) {
+	tests := []struct {
+		name                                      string
+		fromPlan, fromInterval, toPlan, toInterval string
+		hasSchedule                               bool
+		want                                      string
+	}{
+		{"same without schedule", "team", "month", "team", "month", false, "unchanged"},
+		{"same cancels schedule", "team", "month", "team", "month", true, "cancel_scheduled"},
+		{"downgrade is deferred", "team", "month", "starter", "month", false, "deferred"},
+		{"existing deferred target can be replaced", "team", "month", "starter", "month", true, "deferred"},
+		{"upgrade is immediate", "starter", "month", "team", "month", false, "immediate"},
+		{"upgrade releases old schedule", "starter", "month", "team", "month", true, "release_then_immediate"},
+		{"annual to monthly is deferred", "starter", "year", "starter", "month", true, "deferred"},
+		{"monthly to annual replaces old schedule immediately", "starter", "month", "starter", "year", true, "release_then_immediate"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := subscriptionChangeMode(tt.fromPlan, tt.fromInterval, tt.toPlan, tt.toInterval, tt.hasSchedule)
+			if got != tt.want {
+				t.Fatalf("got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStripeEventSubject(t *testing.T) {
 	tests := []struct {
 		name         string
