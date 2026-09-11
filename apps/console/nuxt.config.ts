@@ -48,6 +48,8 @@ export default defineNuxtConfig({
         'X-Frame-Options': 'DENY',
         'Referrer-Policy': 'no-referrer',
         'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+        'Strict-Transport-Security': 'max-age=31536000',
       },
     },
   },
