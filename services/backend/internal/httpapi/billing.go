@@ -248,28 +248,40 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if oldPlan == "" {
 		return nil, bad("UNRECOGNIZED_PRICE")
 	}
-	if oldPlan == in.Plan && oldInterval == in.Interval {
+	mode := subscriptionChangeMode(oldPlan, oldInterval, in.Plan, in.Interval, live.Schedule != nil)
+	if mode == "unchanged" {
 		return gin.H{"status": "unchanged"}, nil
 	}
-	if live.Schedule != nil && !subscriptions.DeferredChange(oldPlan, in.Plan, oldInterval, in.Interval) {
-		return nil, APIError{"PLAN_CHANGE_ALREADY_SCHEDULED", 409}
+	if mode == "cancel_scheduled" {
+		if e = s.releaseScheduledChange(c, tx, client, live.Schedule.ID); e != nil {
+			return nil, e
+		}
+		return gin.H{"status": "schedule_canceled"}, nil
 	}
 	key := "change-" + *sid + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(item.CurrentPeriodStart, 10)
-	if subscriptions.DeferredChange(oldPlan, in.Plan, oldInterval, in.Interval) {
-		schedule, e := client.V1SubscriptionSchedules.Create(c.Request.Context(), &stripe.SubscriptionScheduleCreateParams{
-			Params: stripe.Params{IdempotencyKey: stripe.String(key + "-create")}, FromSubscription: sid,
-		})
-		if e != nil {
+	if mode == "deferred" {
+		scheduleID := ""
+		if live.Schedule != nil {
+			scheduleID = live.Schedule.ID
+		} else {
+			schedule, e := client.V1SubscriptionSchedules.Create(c.Request.Context(), &stripe.SubscriptionScheduleCreateParams{
+				Params: stripe.Params{IdempotencyKey: stripe.String(key + "-create")}, FromSubscription: sid,
+			})
+			if e != nil {
+				return nil, APIError{"STRIPE_UNAVAILABLE", 503}
+			}
+			scheduleID = schedule.ID
+		}
+		if _, e = client.V1SubscriptionSchedules.Update(c.Request.Context(), scheduleID, scheduleParams(item, price, in.Interval, key+"-phases")); e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 		}
-		if live.Schedule != nil && live.Schedule.ID != schedule.ID {
-			return nil, APIError{"PLAN_CHANGE_ALREADY_SCHEDULED", 409}
-		}
-		if _, e = client.V1SubscriptionSchedules.Update(c.Request.Context(), schedule.ID, scheduleParams(item, price, in.Interval, key+"-phases")); e != nil {
-			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
-		}
-		_, e = tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=$1,scheduled_interval=$2,provider_schedule_id=$3 WHERE billing_account_id=$4`, in.Plan, in.Interval, schedule.ID, c.GetString("billing_account_id"))
+		_, e = tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=$1,scheduled_interval=$2,provider_schedule_id=$3 WHERE billing_account_id=$4`, in.Plan, in.Interval, scheduleID, c.GetString("billing_account_id"))
 		return gin.H{"status": "scheduled", "effective_at": time.Unix(item.CurrentPeriodEnd, 0)}, e
+	}
+	if mode == "release_then_immediate" {
+		if e = s.releaseScheduledChange(c, tx, client, live.Schedule.ID); e != nil {
+			return nil, e
+		}
 	}
 	params := &stripe.SubscriptionUpdateParams{
 		Params:            stripe.Params{IdempotencyKey: stripe.String(key)},
@@ -283,6 +295,15 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
 	}
 	return gin.H{"status": "awaiting_webhook"}, nil
+}
+func (s *Server) releaseScheduledChange(c *gin.Context, tx pgx.Tx, client *stripe.Client, scheduleID string) error {
+	if _, e := client.V1SubscriptionSchedules.Release(c.Request.Context(), scheduleID, &stripe.SubscriptionScheduleReleaseParams{
+		Params: stripe.Params{IdempotencyKey: stripe.String("release-" + scheduleID)},
+	}); e != nil {
+		return APIError{"STRIPE_UNAVAILABLE", 503}
+	}
+	_, e := tx.Exec(c.Request.Context(), `UPDATE subscriptions SET scheduled_plan=NULL,scheduled_interval=NULL,provider_schedule_id=NULL WHERE billing_account_id=$1`, c.GetString("billing_account_id"))
+	return e
 }
 func (s *Server) cancelSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := s.billingOwner(c, tx); e != nil {
@@ -324,6 +345,22 @@ func (s *Server) mapPrice(id string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+func subscriptionChangeMode(fromPlan, fromInterval, toPlan, toInterval string, hasSchedule bool) string {
+	if fromPlan == toPlan && fromInterval == toInterval {
+		if hasSchedule {
+			return "cancel_scheduled"
+		}
+		return "unchanged"
+	}
+	if subscriptions.DeferredChange(fromPlan, toPlan, fromInterval, toInterval) {
+		return "deferred"
+	}
+	if hasSchedule {
+		return "release_then_immediate"
+	}
+	return "immediate"
 }
 
 func subscriptionItem(live *stripe.Subscription) *stripe.SubscriptionItem {
