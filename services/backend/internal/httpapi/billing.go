@@ -260,6 +260,11 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	}
 	key := "change-" + *sid + "-" + in.Plan + "-" + in.Interval + "-" + strconv.FormatInt(item.CurrentPeriodStart, 10)
 	if mode == "deferred" {
+		if live.CancelAtPeriodEnd {
+			if e = clearPendingCancellation(c.Request.Context(), client, *sid); e != nil {
+				return nil, e
+			}
+		}
 		scheduleID := ""
 		if live.Schedule != nil {
 			scheduleID = live.Schedule.ID
@@ -287,6 +292,7 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		Params:            stripe.Params{IdempotencyKey: stripe.String(key)},
 		Items:             []*stripe.SubscriptionUpdateItemParams{{ID: stripe.String(item.ID), Price: stripe.String(price)}},
 		ProrationBehavior: stripe.String("always_invoice"), PaymentBehavior: stripe.String("pending_if_incomplete"),
+		CancelAtPeriodEnd: stripe.Bool(false),
 	}
 	if oldInterval != in.Interval {
 		params.BillingCycleAnchorNow = stripe.Bool(true)
@@ -330,7 +336,7 @@ func (s *Server) cancelSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		}
 	}
 	_, e = client.V1Subscriptions.Update(c.Request.Context(), *id, &stripe.SubscriptionUpdateParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String("cancel-" + *id)}, CancelAtPeriodEnd: stripe.Bool(true),
+		Params: stripe.Params{IdempotencyKey: stripe.String("cancel-" + uuid.NewString())}, CancelAtPeriodEnd: stripe.Bool(true),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
