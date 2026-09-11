@@ -5,19 +5,26 @@ const route = useRoute()
 const token = ref(String(route.query.token ?? '')),
   error = ref(''),
   busy = ref(false)
+if (import.meta.client && token.value) {
+  const query = { ...route.query }
+  delete query.token
+  await navigateTo({ path: route.path, query }, { replace: true })
+}
 async function accept() {
   busy.value = true
+  error.value = ''
   try {
     await loadUser()
     await api('/invitations/accept', { method: 'POST', body: { token: token.value } })
     token.value = ''
     await loadUser()
-    await navigateTo('/onboarding')
   } catch (e) {
     error.value = errorText(e)
+    return
   } finally {
     busy.value = false
   }
+  await navigateTo('/onboarding')
 }
 </script>
 <template>
