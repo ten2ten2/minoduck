@@ -37,6 +37,9 @@ func TestImportCorrectionKeysAndPrecision(t *testing.T) {
 	if p.Entries[0].Start.Hour() != 5 {
 		t.Fatal("source timezone not preserved")
 	}
+	if p.Entries[0].SourceRef != "csv:row:2" {
+		t.Fatal("csv evidence row reference missing")
+	}
 	duplicate := csv + "2024-02-29,2024-03-01,unknown-model,0.123456789123,USD,usage,complete\n"
 	p, e = ParseCSV([]byte(duplicate), "custom", "scope", "UTC", "actual", "aggregate")
 	if e != nil || p.Rejected != 1 {
@@ -45,6 +48,26 @@ func TestImportCorrectionKeysAndPrecision(t *testing.T) {
 	_, e = ParseCSV([]byte("prompt,amount\nsecret,1\n"), "custom", "scope", "UTC", "actual", "aggregate")
 	if e == nil {
 		t.Fatal("prompt accepted")
+	}
+}
+func TestEventIdentityUsesStableSourceID(t *testing.T) {
+	a := "period_start,period_end,model,amount,currency,charge_category,project,source_event_id,coverage\n2026-01-01,2026-01-02,model-a,1.25,USD,usage,project-a,event-1,complete\n"
+	b := "period_start,period_end,model,amount,currency,charge_category,project,source_event_id,coverage\n2026-01-02,2026-01-03,model-b,2.50,EUR,fee,project-b,event-1,partial\n"
+	first, e := ParseCSV([]byte(a), "custom", "events", "UTC", "actual", "event")
+	if e != nil || first.Rejected != 0 {
+		t.Fatal("first event rejected", e, first.Errors)
+	}
+	corrected, e := ParseCSV([]byte(b), "custom", "events", "UTC", "actual", "event")
+	if e != nil || corrected.Rejected != 0 {
+		t.Fatal("corrected event rejected", e, corrected.Errors)
+	}
+	if first.Entries[0].Key != corrected.Entries[0].Key {
+		t.Fatal("mutable event fields changed stable identity")
+	}
+	other := corrected.Entries[0]
+	other.SourceID = "event-2"
+	if NaturalKey(other) == corrected.Entries[0].Key {
+		t.Fatal("different source event IDs shared an identity")
 	}
 }
 func TestCSVInjection(t *testing.T) {
