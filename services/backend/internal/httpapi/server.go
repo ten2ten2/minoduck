@@ -206,6 +206,7 @@ func (s *Server) tenant(role string, h tenantHandler) gin.HandlerFunc {
 					s.fail(c, bad("INVALID_ID"))
 					return
 				}
+			}
 		}
 		tx, e := platform.TenantTx(c.Request.Context(), s.DB, wid)
 		if e != nil {
