@@ -14,17 +14,17 @@ func CompleteScope(ctx context.Context, tx pgx.Tx, wid, account, currency, scope
 	var complete bool
 	e := tx.QueryRow(ctx, `SELECT coalesce(range_agg(span) @> tstzrange($5,$6,'[)'),false) FROM (
  SELECT tstzrange(period_start,period_end,'[)') AS span FROM cost_entries WHERE workspace_id=$1 AND account_id=$2 AND is_current AND cost_kind='actual' AND currency=$3 AND source_scope=$4 AND coverage_status='complete' AND period_start<$6 AND period_end>$5
- UNION ALL SELECT tstzrange(period_start,period_end,'[)') FROM sync_runs WHERE workspace_id=$1 AND account_id=$2 AND state='succeeded' AND $4='native-cost' AND period_start<$6 AND period_end>$5
+ UNION ALL SELECT tstzrange((preview->>'period_start')::timestamptz,(preview->>'period_end')::timestamptz,'[)') FROM source_batches WHERE workspace_id=$1 AND account_id=$2 AND state='committed' AND source_scope='native-cost' AND $4='native-cost' AND preview ? 'period_start' AND preview ? 'period_end' AND (preview->>'period_start')::timestamptz<$6 AND (preview->>'period_end')::timestamptz>$5
  ) windows`, wid, account, currency, scope, start, end).Scan(&complete)
 	return complete, e
 }
 
-// CompleteUsage verifies that successful native connector runs cover the entire
-// requested interval. A missing usage bucket can legitimately mean zero usage,
-// so successful fetch windows—not row presence—are the coverage evidence.
+// CompleteUsage verifies that retained, fully fetched native source shards cover
+// the entire requested interval. A missing usage bucket can legitimately mean
+// zero usage, so committed shard windows—not row presence—are the evidence.
 func CompleteUsage(ctx context.Context, tx pgx.Tx, wid, account string, start, end time.Time) (bool, error) {
 	var complete bool
-	e := tx.QueryRow(ctx, `SELECT coalesce(range_agg(tstzrange(period_start,period_end,'[)')) @> tstzrange($3,$4,'[)'),false) FROM sync_runs WHERE workspace_id=$1 AND account_id=$2 AND state='succeeded' AND period_start<$4 AND period_end>$3`, wid, account, start, end).Scan(&complete)
+	e := tx.QueryRow(ctx, `SELECT coalesce(range_agg(tstzrange((preview->>'period_start')::timestamptz,(preview->>'period_end')::timestamptz,'[)')) @> tstzrange($3,$4,'[)'),false) FROM source_batches WHERE workspace_id=$1 AND account_id=$2 AND state='committed' AND source_scope='native-cost' AND preview ? 'period_start' AND preview ? 'period_end' AND (preview->>'period_start')::timestamptz<$4 AND (preview->>'period_end')::timestamptz>$3`, wid, account, start, end).Scan(&complete)
 	return complete, e
 }
 
