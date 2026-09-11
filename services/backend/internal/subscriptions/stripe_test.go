@@ -84,7 +84,7 @@ func TestSDKRetriesKeepIdempotencyAndReleaseResponses(t *testing.T) {
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: response, Request: r}, nil
 	})})
 	out, err := client.V1CheckoutSessions.Create(context.Background(), &stripe.CheckoutSessionCreateParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String("checkout-fixture")}, Mode: stripe.String("subscription"),
+		IdempotencyKey: stripe.String("checkout-fixture"), Mode: stripe.String("subscription"),
 	})
 	if err != nil || out.ID != "cs_fixture" || attempts != 2 {
 		t.Fatalf("retry result: id=%q attempts=%d error=%v", out.ID, attempts, err)
@@ -137,7 +137,7 @@ func TestSDKDoesNotRetryValidationErrorsOrExposeProviderDetails(t *testing.T) {
 		attempts++
 		return &http.Response{StatusCode: 400, Header: http.Header{}, Request: r, Body: io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"customer@example.test private details"}}`))}, nil
 	})})
-	_, err := client.V1Customers.Create(context.Background(), &stripe.CustomerCreateParams{Params: stripe.Params{IdempotencyKey: stripe.String("customer-fixture")}})
+	_, err := client.V1Customers.Create(context.Background(), &stripe.CustomerCreateParams{IdempotencyKey: stripe.String("customer-fixture")})
 	if err == nil || err.Error() != "STRIPE_REQUEST_FAILED_400" || attempts != 1 {
 		t.Fatalf("validation error handling: %v, attempts=%d", err, attempts)
 	}
@@ -150,7 +150,7 @@ func TestSDKRequestCancellation(t *testing.T) {
 		cancel()
 		return nil, r.Context().Err()
 	})})
-	_, err := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{Params: stripe.Params{IdempotencyKey: stripe.String("customer-fixture")}})
+	_, err := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{IdempotencyKey: stripe.String("customer-fixture")})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation was swallowed: %v", err)
 	}

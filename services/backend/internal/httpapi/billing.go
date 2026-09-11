@@ -34,12 +34,12 @@ func (s *Server) billingOwner(c *gin.Context, tx pgx.Tx) error {
 	// conflict with its billing_accounts foreign key.
 	return subscriptions.LockAccount(c.Request.Context(), tx, account)
 }
-func (s *Server) billingURL(c *gin.Context, tx pgx.Tx) string {
+func (s *Server) billingURL(c *gin.Context, tx pgx.Tx) (string, error) {
 	var slug string
 	if e := tx.QueryRow(c.Request.Context(), `SELECT slug FROM workspaces WHERE id=$1`, c.Param("wid")).Scan(&slug); e != nil {
-		return s.Config.AppURL + "/onboarding"
+		return "", e
 	}
-	return s.Config.AppURL + "/w/" + slug + "/settings/billing"
+	return s.Config.AppURL + "/w/" + slug + "/settings/billing", nil
 }
 func (s *Server) subscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	p, e := s.plan(c, tx)
@@ -56,17 +56,7 @@ func (s *Server) subscription(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if e = rows.Scan(&id); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		ids = append(ids, id)
-	}
-	e = rows.Err()
-	rows.Close()
+	ids, e := pgx.CollectRows(rows, pgx.RowTo[string])
 	if e != nil {
 		return nil, e
 	}
@@ -154,8 +144,8 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	client := s.stripe()
 	if customer == nil {
 		out, e := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{
-			Params: stripe.Params{IdempotencyKey: stripe.String("customer-" + account)},
-			Email:  stripe.String(session(c).Email), Metadata: map[string]string{"billing_account_id": account},
+			IdempotencyKey: stripe.String("customer-" + account),
+			Email:          stripe.String(session(c).Email), Metadata: map[string]string{"billing_account_id": account},
 		})
 		if e != nil {
 			return nil, APIError{"STRIPE_UNAVAILABLE", 503}
@@ -176,17 +166,20 @@ func (s *Server) checkout(c *gin.Context, tx pgx.Tx) (any, error) {
 	if existingURL != nil {
 		return gin.H{"url": *existingURL}, nil
 	}
-	returnURL := s.billingURL(c, tx)
+	returnURL, e := s.billingURL(c, tx)
+	if e != nil {
+		return nil, e
+	}
 	out, e := client.V1CheckoutSessions.Create(ctx, &stripe.CheckoutSessionCreateParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String(key)},
-		Mode:   stripe.String("subscription"), Customer: customer,
+		IdempotencyKey: stripe.String(key),
+		Mode:           stripe.String("subscription"), Customer: customer,
 		LineItems:  []*stripe.CheckoutSessionCreateLineItemParams{{Price: stripe.String(price), Quantity: stripe.Int64(1)}},
 		SuccessURL: stripe.String(returnURL + "?checkout=success"), CancelURL: stripe.String(returnURL + "?checkout=canceled"),
 		SubscriptionData: &stripe.CheckoutSessionCreateSubscriptionDataParams{
 			Metadata:    map[string]string{"billing_account_id": account},
 			BillingMode: &stripe.CheckoutSessionCreateSubscriptionDataBillingModeParams{Type: stripe.String("flexible")},
 		},
-		ClientReferenceID: stripe.String(account), ExpiresAt: stripe.Int64(expiry.Unix()),
+		ClientReferenceID: stripe.String(account), ExpiresAt: new(expiry.Unix()),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
@@ -249,9 +242,13 @@ func (s *Server) portal(c *gin.Context, tx pgx.Tx) (any, error) {
 	if s.Config.StripePortalConfig == "" {
 		return nil, APIError{"STRIPE_PORTAL_NOT_CONFIGURED", 503}
 	}
+	returnURL, e := s.billingURL(c, tx)
+	if e != nil {
+		return nil, e
+	}
 	out, e := s.stripe().V1BillingPortalSessions.Create(c.Request.Context(), &stripe.BillingPortalSessionCreateParams{
-		Params:   stripe.Params{IdempotencyKey: stripe.String(uuid.NewString())},
-		Customer: customer, ReturnURL: stripe.String(s.billingURL(c, tx)), Configuration: stripe.String(s.Config.StripePortalConfig),
+		IdempotencyKey: stripe.String(uuid.NewString()),
+		Customer:       customer, ReturnURL: stripe.String(returnURL), Configuration: stripe.String(s.Config.StripePortalConfig),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
@@ -312,7 +309,7 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 			scheduleID = live.Schedule.ID
 		} else {
 			schedule, e := client.V1SubscriptionSchedules.Create(c.Request.Context(), &stripe.SubscriptionScheduleCreateParams{
-				Params: stripe.Params{IdempotencyKey: stripe.String(key + "-create")}, FromSubscription: sid,
+				IdempotencyKey: stripe.String(key + "-create"), FromSubscription: sid,
 			})
 			if e != nil {
 				return nil, APIError{"STRIPE_UNAVAILABLE", 503}
@@ -335,13 +332,13 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		}
 	}
 	params := &stripe.SubscriptionUpdateParams{
-		Params:            stripe.Params{IdempotencyKey: stripe.String(key)},
+		IdempotencyKey:    stripe.String(key),
 		Items:             []*stripe.SubscriptionUpdateItemParams{{ID: stripe.String(item.ID), Price: stripe.String(price)}},
 		ProrationBehavior: stripe.String("always_invoice"), PaymentBehavior: stripe.String("pending_if_incomplete"),
-		CancelAtPeriodEnd: stripe.Bool(false),
+		CancelAtPeriodEnd: new(false),
 	}
 	if oldInterval != in.Interval {
-		params.BillingCycleAnchorNow = stripe.Bool(true)
+		params.BillingCycleAnchorNow = new(true)
 	}
 	updated, e := client.V1Subscriptions.Update(c.Request.Context(), *sid, params)
 	if e != nil {
@@ -373,7 +370,7 @@ func (s *Server) changeSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 }
 func (s *Server) releaseScheduledChange(c *gin.Context, tx pgx.Tx, client *stripe.Client, scheduleID string) error {
 	if _, e := client.V1SubscriptionSchedules.Release(c.Request.Context(), scheduleID, &stripe.SubscriptionScheduleReleaseParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String("release-" + scheduleID)},
+		IdempotencyKey: stripe.String("release-" + scheduleID),
 	}); e != nil {
 		return APIError{"STRIPE_UNAVAILABLE", 503}
 	}
@@ -410,7 +407,7 @@ func (s *Server) cancelSubscription(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	_, e = client.V1Subscriptions.Update(c.Request.Context(), *id, &stripe.SubscriptionUpdateParams{
-		Params: stripe.Params{IdempotencyKey: stripe.String(key)}, CancelAtPeriodEnd: stripe.Bool(true),
+		IdempotencyKey: stripe.String(key), CancelAtPeriodEnd: new(true),
 	})
 	if e != nil {
 		return nil, APIError{"STRIPE_UNAVAILABLE", 503}
@@ -484,11 +481,11 @@ func subscriptionItem(live *stripe.Subscription) *stripe.SubscriptionItem {
 
 func scheduleParams(current *stripe.SubscriptionItem, price, interval, key string) *stripe.SubscriptionScheduleUpdateParams {
 	return &stripe.SubscriptionScheduleUpdateParams{
-		Params:      stripe.Params{IdempotencyKey: stripe.String(key)},
-		EndBehavior: stripe.String("release"), ProrationBehavior: stripe.String("none"),
+		IdempotencyKey: stripe.String(key),
+		EndBehavior:    stripe.String("release"), ProrationBehavior: stripe.String("none"),
 		Phases: []*stripe.SubscriptionScheduleUpdatePhaseParams{
 			{
-				StartDate: stripe.Int64(current.CurrentPeriodStart), EndDate: stripe.Int64(current.CurrentPeriodEnd),
+				StartDate: new(current.CurrentPeriodStart), EndDate: new(current.CurrentPeriodEnd),
 				Items:             []*stripe.SubscriptionScheduleUpdatePhaseItemParams{{Price: stripe.String(current.Price.ID), Quantity: stripe.Int64(1)}},
 				ProrationBehavior: stripe.String("none"),
 			},
@@ -615,8 +612,7 @@ func (s *Server) stripeWebhook(c *gin.Context) {
 	fail := func(err error) {
 		_ = tx.Rollback(ctx)
 		code := "INTERNAL_ERROR"
-		var known APIError
-		if errors.As(err, &known) {
+		if known, ok := errors.AsType[APIError](err); ok {
 			code = known.Code
 		}
 		s.markBillingEvent(ctx, event.ID, "failed", code)

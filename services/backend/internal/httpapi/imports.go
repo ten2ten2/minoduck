@@ -10,7 +10,7 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -204,13 +204,14 @@ func importRetentionBucket(end time.Time) string {
 func (s *Server) publishImportPartitions(ctx context.Context, tx pgx.Tx, wid, aid, importID, scope, kind, zone, granularity string, entries []ledger.Entry) (_ int, err error) {
 	groups := map[string][]ledger.Entry{}
 	for _, entry := range entries {
-		groups[importRetentionBucket(entry.End)] = append(groups[importRetentionBucket(entry.End)], entry)
+		bucket := importRetentionBucket(entry.End)
+		groups[bucket] = append(groups[bucket], entry)
 	}
 	keys := make([]string, 0, len(groups))
 	for key := range groups {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	created := []string{}
 	defer func() {
 		if err == nil {

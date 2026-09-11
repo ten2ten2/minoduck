@@ -134,7 +134,7 @@ func Load() (Config, error) {
 		return c, errors.New("R2_ENDPOINT must be an HTTPS origin without path, query or credentials")
 	}
 	if c.hasStripeConfig() && !c.stripeConfigured() {
-		return c, errors.New("Stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
+		return c, errors.New("stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
 	}
 	if c.Env == "production" && (strings.HasPrefix(c.StripeKey, "sk_live_") || strings.HasPrefix(c.StripeKey, "rk_live_")) && !validLegalRelease(c) {
 		return c, errors.New("live Stripe requires approved legal entity, contact and Terms/Privacy effective dates")

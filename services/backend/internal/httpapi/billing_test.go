@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -111,9 +112,7 @@ func TestOpenAITextUsageRejectsNonComparableDimensions(t *testing.T) {
 	}
 	for _, key := range []string{"input_audio", "input_cached_audio", "input_image", "input_cached_image", "cache_write"} {
 		metrics := map[string]string{}
-		for name, value := range plain {
-			metrics[name] = value
-		}
+		maps.Copy(metrics, plain)
 		metrics[key] = "1"
 		if textUsageComparable("openai", metrics, map[string]string{}) {
 			t.Fatalf("non-comparable metric was accepted: %s", key)

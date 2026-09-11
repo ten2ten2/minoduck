@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -22,7 +23,7 @@ func run() error {
 	defer cancel()
 	dsn := os.Getenv("MIGRATION_DATABASE_URL")
 	if dsn == "" {
-		dsn = os.Getenv("DATABASE_URL")
+		return errors.New("MIGRATION_DATABASE_URL is required")
 	}
 	db, e := pgxpool.New(ctx, dsn)
 	if e != nil {

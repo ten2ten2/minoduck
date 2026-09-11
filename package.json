@@ -10,13 +10,15 @@
     "build": "pnpm --filter './apps/*' build",
     "typecheck": "pnpm --filter './apps/*' typecheck",
     "format:check": "prettier --check .",
-    "lint": "node scripts/lint-source.mjs",
-    "check:a11y": "node scripts/check-a11y.mjs",
+    "lint": "eslint . --max-warnings=0",
     "check:locales": "node scripts/check-locales.mjs",
     "test": "node --test scripts/*.test.mjs",
-    "verify": "pnpm format:check && pnpm lint && pnpm check:a11y && pnpm check:locales && pnpm test && pnpm typecheck && pnpm build"
+    "verify": "pnpm format:check && pnpm lint && pnpm check:locales && pnpm test && pnpm typecheck && pnpm build"
   },
   "devDependencies": {
+    "@nuxt/eslint-config": "1.17.0",
+    "eslint": "10.10.0",
+    "eslint-plugin-vuejs-accessibility": "2.6.0",
     "prettier": "3.9.6"
   }
 }

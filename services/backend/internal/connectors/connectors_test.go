@@ -96,8 +96,8 @@ func TestProviderFailuresNeverPublishPartialSnapshot(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			c := fixtureClient(t, func(*http.Request) (int, string, string) { return tc.status, `{"sensitive":"never exposed"}`, "120" })
 			s, e := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
-			var f Failure
-			if !errors.As(e, &f) || f.Code != tc.code || f.Permanent != tc.permanent || len(s.Entries) != 0 {
+			f, ok := errors.AsType[Failure](e)
+			if !ok || f.Code != tc.code || f.Permanent != tc.permanent || len(s.Entries) != 0 {
 				t.Fatalf("wrong failure: %+v %+v", s, e)
 			}
 			if tc.status == 429 && f.RetryAfter != 2*time.Minute {
@@ -161,8 +161,8 @@ func TestProviderIdentityValidation(t *testing.T) {
 			return 200, `{"id":"org_verified"}{"unexpected":true}`, ""
 		})
 		_, err := client.Identity(context.Background(), "anthropic", "synthetic-key", "")
-		var failure Failure
-		if !errors.As(err, &failure) || failure.Code != "SOURCE_SCHEMA_CHANGED" || !failure.Permanent {
+		failure, ok := errors.AsType[Failure](err)
+		if !ok || failure.Code != "SOURCE_SCHEMA_CHANGED" || !failure.Permanent {
 			t.Fatalf("trailing response accepted: %v", err)
 		}
 	})
@@ -213,8 +213,8 @@ func TestUsageValidationRejectsCorruptSnapshots(t *testing.T) {
 				return 200, tc.body, ""
 			})
 			snapshot, err := c.Fetch(context.Background(), "openai", "synthetic-key", "", start, end)
-			var failure Failure
-			if !errors.As(err, &failure) || failure.Code != tc.code || !failure.Permanent || len(snapshot.Entries) != 0 || len(snapshot.Usage) != 0 {
+			failure, ok := errors.AsType[Failure](err)
+			if !ok || failure.Code != tc.code || !failure.Permanent || len(snapshot.Entries) != 0 || len(snapshot.Usage) != 0 {
 				t.Fatalf("corrupt usage was not rejected atomically: snapshot=%+v error=%+v", snapshot, err)
 			}
 		})

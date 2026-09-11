@@ -191,8 +191,7 @@ func (s *Server) authenticate(c *gin.Context) {
 }
 func (s *Server) fail(c *gin.Context, err error) {
 	e := APIError{"INTERNAL_ERROR", 500}
-	var known APIError
-	if errors.As(err, &known) {
+	if known, ok := errors.AsType[APIError](err); ok {
 		e = known
 	} else if errors.Is(err, pgx.ErrNoRows) {
 		e = APIError{"NOT_FOUND", 404}

@@ -303,8 +303,7 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 		if e = w.publishShardLocked(ctx, tx, a, aid, shard); e != nil {
 			_ = tx.Rollback(ctx)
 			w.cleanupSyncObjects(a.WorkspaceID, staged)
-			var failure connectors.Failure
-			if errors.As(e, &failure) {
+			if _, ok := errors.AsType[connectors.Failure](e); ok {
 				return w.syncFailure(ctx, job, aid, generation, e)
 			}
 			return e
@@ -372,14 +371,20 @@ func (w *Worker) publishShardLocked(ctx context.Context, tx pgx.Tx, a tasks.Args
 	if _, e = tx.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS publish_usage_stage(source_record_key text NOT NULL,period_start timestamptz NOT NULL,period_end timestamptz NOT NULL,model text NOT NULL,metrics jsonb NOT NULL,dimensions jsonb NOT NULL) ON COMMIT DROP; TRUNCATE publish_usage_stage`); e != nil {
 		return e
 	}
-	usageRows := make([][]any, 0, len(snapshot.Usage))
-	for _, u := range snapshot.Usage {
-		metrics, _ := json.Marshal(u.Metrics)
-		dims, _ := json.Marshal(u.Dimensions)
-		usageRows = append(usageRows, []any{u.Key, u.Start, u.End, u.Model, metrics, dims})
-	}
-	if len(usageRows) > 0 {
-		if _, e = tx.CopyFrom(ctx, pgx.Identifier{"publish_usage_stage"}, []string{"source_record_key", "period_start", "period_end", "model", "metrics", "dimensions"}, pgx.CopyFromRows(usageRows)); e != nil {
+	if len(snapshot.Usage) > 0 {
+		usageRows := pgx.CopyFromSlice(len(snapshot.Usage), func(i int) ([]any, error) {
+			u := snapshot.Usage[i]
+			metrics, err := json.Marshal(u.Metrics)
+			if err != nil {
+				return nil, err
+			}
+			dims, err := json.Marshal(u.Dimensions)
+			if err != nil {
+				return nil, err
+			}
+			return []any{u.Key, u.Start, u.End, u.Model, metrics, dims}, nil
+		})
+		if _, e = tx.CopyFrom(ctx, pgx.Identifier{"pg_temp", "publish_usage_stage"}, []string{"source_record_key", "period_start", "period_end", "model", "metrics", "dimensions"}, usageRows); e != nil {
 			return e
 		}
 		if _, e = tx.Exec(ctx, `INSERT INTO usage_buckets(workspace_id,account_id,source_batch_id,source_record_key,period_start,period_end,model,metrics,dimensions) SELECT $1,$2,$3,source_record_key,period_start,period_end,model,metrics,dimensions FROM publish_usage_stage ON CONFLICT(workspace_id,account_id,source_record_key) DO UPDATE SET source_batch_id=excluded.source_batch_id,period_start=excluded.period_start,period_end=excluded.period_end,model=excluded.model,metrics=excluded.metrics,dimensions=excluded.dimensions`, a.WorkspaceID, aid, shard.Batch); e != nil {
@@ -396,8 +401,8 @@ func (w *Worker) syncFailure(ctx context.Context, job *river.Job[tasks.Args], ai
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	var f connectors.Failure
-	if !errors.As(err, &f) {
+	f, ok := errors.AsType[connectors.Failure](err)
+	if !ok {
 		f = connectors.Failure{Code: "PROVIDER_UNAVAILABLE"}
 	}
 	tx, e := platform.TenantTx(ctx, w.DB, job.Args.WorkspaceID)

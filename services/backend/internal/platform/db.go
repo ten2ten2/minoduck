@@ -31,14 +31,5 @@ func JSONRows(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]json.R
 	if e != nil {
 		return nil, e
 	}
-	defer rows.Close()
-	out := []json.RawMessage{}
-	for rows.Next() {
-		var b []byte
-		if e = rows.Scan(&b); e != nil {
-			return nil, e
-		}
-		out = append(out, json.RawMessage(b))
-	}
-	return out, rows.Err()
+	return pgx.CollectRows(rows, pgx.RowTo[json.RawMessage])
 }

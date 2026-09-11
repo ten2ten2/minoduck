@@ -43,7 +43,7 @@ docker compose up --build
 | --------------------------------- | -------------------------------------------- |
 | `apps/site`                       | Nuxt 官网、语言路由与 SEO                    |
 | `apps/console`                    | Nuxt 控制台与同源 BFF                        |
-| `packages/ui`、`packages/locales` | 共享组件、样式与语言文案                     |
+| `packages/ui`、`packages/locales` | 共享 Nuxt layer、组件、样式与三语文案        |
 | `services/backend`                | Go API、River Worker、Cron、数据库迁移与测试 |
 | `infra`                           | PostgreSQL 角色初始化、Cloudflare 根域重定向 |
 
@@ -53,7 +53,9 @@ docker compose up --build
 pnpm verify
 cd services/backend
 go mod verify
+go fix -diff ./...
 go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 # 使用独立测试数据库，不要连接生产库。
 TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5432/minoduck_test?sslmode=disable' go test -race -count=1 ./...
 go build ./cmd/...
@@ -61,7 +63,9 @@ go build ./cmd/...
 sqlc generate
 ```
 
-未设置 `TEST_DATABASE_URL` 时数据库集成测试会跳过。GitHub CI 使用 PostgreSQL 18.6，运行完整后端测试与两个前端的类型检查、生产构建。
+未设置 `TEST_DATABASE_URL` 时数据库集成测试会跳过。`pnpm verify` 包含 Prettier、Nuxt ESLint/Vue 无障碍规则、语言检查、单测、类型检查和生产构建。CI 另用 PostgreSQL 18.6 运行后端集成测试与 race 检查。
+
+迁移命令必须显式设置 `MIGRATION_DATABASE_URL`，不会回退到运行账户。
 
 ## 文档
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
@@ -43,17 +44,7 @@ func run() error {
 		return e
 	}
 	type item struct{ W, A string }
-	items := []item{}
-	for rows.Next() {
-		var i item
-		if e = rows.Scan(&i.W, &i.A); e != nil {
-			rows.Close()
-			return e
-		}
-		items = append(items, i)
-	}
-	e = rows.Err()
-	rows.Close()
+	items, e := pgx.CollectRows(rows, pgx.RowToStructByPos[item])
 	if e != nil {
 		return e
 	}
@@ -74,17 +65,7 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	maintenanceIDs := []string{}
-	for maintenanceRows.Next() {
-		var id string
-		if e = maintenanceRows.Scan(&id); e != nil {
-			maintenanceRows.Close()
-			return e
-		}
-		maintenanceIDs = append(maintenanceIDs, id)
-	}
-	e = maintenanceRows.Err()
-	maintenanceRows.Close()
+	maintenanceIDs, e := pgx.CollectRows(maintenanceRows, pgx.RowTo[string])
 	if e != nil {
 		return e
 	}

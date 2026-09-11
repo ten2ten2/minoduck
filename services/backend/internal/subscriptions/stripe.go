@@ -43,8 +43,7 @@ func (b stripeBackend) Call(method, path, key string, params stripe.ParamsContai
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var stripeErr *stripe.Error
-		if errors.As(err, &stripeErr) {
+		if stripeErr, ok := errors.AsType[*stripe.Error](err); ok {
 			return fmt.Errorf("STRIPE_REQUEST_FAILED_%d", stripeErr.HTTPStatusCode)
 		}
 		return errors.New("STRIPE_UNAVAILABLE")

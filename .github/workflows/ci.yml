@@ -17,7 +17,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
-      - run: pnpm check:a11y
       - run: pnpm check:locales
       - run: pnpm test
       - run: pnpm typecheck
@@ -50,5 +49,10 @@ jobs:
           gofmt -w .
           git diff --exit-code -- .
       - run: go vet ./...
+      - name: Check modern Go idioms
+        run: |
+          go fix ./...
+          git diff --exit-code -- .
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
       - run: go test -race -count=1 ./...
       - run: go build ./cmd/...

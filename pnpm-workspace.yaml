@@ -5,6 +5,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+  unrs-resolver: false
 minimumReleaseAgeExclude:
   - '@cloudflare/workerd-darwin-64@1.20260910.1'
   - '@cloudflare/workerd-darwin-arm64@1.20260910.1'

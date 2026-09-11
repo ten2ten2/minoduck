@@ -5,16 +5,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/ten2ten2/minoduck/services/backend/internal/connectors"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"strings"
 )
 
-func providerCapabilities() any {
+func providerCapabilities() []gin.H {
 	return []gin.H{
-		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.openaiWarning", "l1_native_cost_comparable": false, "native": true},
-		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "organization", "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "l1_native_cost_comparable": false, "l1_pricing_dimensions": []string{"model", "service_tier", "inference_geo", "speed"}, "native": true},
-		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "workspace", "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": "2026-09-11.3", "warning_key": "providers.openrouterWarning", "l1_native_cost_comparable": false, "native": true},
+		{"id": "openai", "name": "OpenAI", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": false, "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": connectors.SchemaVersion, "warning_key": "providers.openaiWarning", "l1_native_cost_comparable": false, "native": true},
+		{"id": "anthropic", "name": "Anthropic", "credential_kind": "admin_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "organization", "history_limit_days": 90, "granularity": "completed_utc_day", "schema_version": connectors.SchemaVersion, "warning_key": "providers.anthropicWarning", "known_exclusions": []string{"priority_tier", "aws_bedrock", "vertex"}, "l1_native_cost_comparable": false, "l1_pricing_dimensions": []string{"model", "service_tier", "inference_geo", "speed"}, "native": true},
+		{"id": "openrouter", "name": "OpenRouter", "credential_kind": "management_key", "supports_usage": true, "supports_cost": true, "supports_invoice": false, "supports_account_identity_validation": true, "identity_scope": "workspace", "history_limit_days": 30, "granularity": "completed_utc_day", "schema_version": connectors.SchemaVersion, "warning_key": "providers.openrouterWarning", "l1_native_cost_comparable": false, "native": true},
 		{"id": "csv", "name": "CSV", "credential_kind": "none", "supports_usage": false, "supports_cost": true, "supports_invoice": true, "supports_account_identity_validation": false, "warning_key": "providers.csvWarning", "native": false},
 	}
 }

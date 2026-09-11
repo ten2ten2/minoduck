@@ -6,18 +6,7 @@ const config = useRuntimeConfig()
 const slug = computed(() =>
   Array.isArray(route.params.slug) ? route.params.slug.join('/') : String(route.params.slug ?? ''),
 )
-const pages = [
-  'integrations',
-  'integrations/openai',
-  'integrations/anthropic',
-  'integrations/openrouter',
-  'integrations/csv',
-  'docs',
-  'security',
-  'privacy',
-  'terms',
-]
-if (!pages.includes(slug.value))
+if (!siteContentPages.includes(slug.value))
   throw createError({ statusCode: 404, statusMessage: 'Page not found' })
 const provider = computed(() =>
   slug.value.startsWith('integrations/') ? slug.value.split('/')[1] : '',

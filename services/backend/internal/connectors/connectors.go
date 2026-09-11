@@ -66,9 +66,10 @@ type Snapshot struct {
 }
 type Client struct{ HTTP *http.Client }
 
+const SchemaVersion = "2026-09-11.3"
+
 type ProviderIdentity struct {
 	ID       string
-	Name     string
 	Scope    string
 	Verified bool
 }
@@ -157,8 +158,7 @@ func (c Client) Identity(ctx context.Context, provider, key, requested string) (
 		return ProviderIdentity{ID: requested, Scope: "organization", Verified: false}, nil
 	case "anthropic":
 		var organization struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID string `json:"id"`
 		}
 		if err := c.get(ctx, provider, key, "/v1/organizations/me", url.Values{}, &organization); err != nil {
 			return ProviderIdentity{}, err
@@ -166,7 +166,7 @@ func (c Client) Identity(ctx context.Context, provider, key, requested string) (
 		if organization.ID == "" {
 			return ProviderIdentity{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
 		}
-		return ProviderIdentity{ID: organization.ID, Name: organization.Name, Scope: "organization", Verified: true}, nil
+		return ProviderIdentity{ID: organization.ID, Scope: "organization", Verified: true}, nil
 	case "openrouter":
 		if requested == "" {
 			return ProviderIdentity{}, Failure{Code: "PROVIDER_SCOPE_REQUIRED", Permanent: true}
@@ -177,7 +177,6 @@ func (c Client) Identity(ctx context.Context, provider, key, requested string) (
 			var page struct {
 				Data []struct {
 					ID   string `json:"id"`
-					Name string `json:"name"`
 					Slug string `json:"slug"`
 				} `json:"data"`
 				Total *int `json:"total_count"`
@@ -193,7 +192,7 @@ func (c Client) Identity(ctx context.Context, provider, key, requested string) (
 					if workspace.ID == "" {
 						return ProviderIdentity{}, Failure{Code: "SOURCE_SCHEMA_CHANGED", Permanent: true}
 					}
-					return ProviderIdentity{ID: workspace.ID, Name: workspace.Name, Scope: "workspace", Verified: true}, nil
+					return ProviderIdentity{ID: workspace.ID, Scope: "workspace", Verified: true}, nil
 				}
 			}
 			offset += len(page.Data)
@@ -211,7 +210,7 @@ func (c Client) Identity(ctx context.Context, provider, key, requested string) (
 }
 
 func (c Client) Fetch(ctx context.Context, provider, key, providerIdentity string, start, end time.Time) (Snapshot, error) {
-	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: "2026-09-11.3"}
+	s := Snapshot{Entries: []ledger.Entry{}, Usage: []Usage{}, Start: start, End: end, Version: SchemaVersion}
 	if !end.After(start) || end.After(time.Now().UTC().Truncate(24*time.Hour)) {
 		return s, Failure{Code: "INVALID_SYNC_WINDOW", Permanent: true}
 	}

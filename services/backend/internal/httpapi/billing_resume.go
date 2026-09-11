@@ -11,8 +11,8 @@ import (
 
 func clearPendingCancellation(ctx context.Context, client *stripe.Client, subscriptionID, idempotencyKey string) error {
 	if _, err := client.V1Subscriptions.Update(ctx, subscriptionID, &stripe.SubscriptionUpdateParams{
-		Params:            stripe.Params{IdempotencyKey: stripe.String(idempotencyKey)},
-		CancelAtPeriodEnd: stripe.Bool(false),
+		IdempotencyKey:    stripe.String(idempotencyKey),
+		CancelAtPeriodEnd: new(false),
 	}); err != nil {
 		return APIError{"STRIPE_UNAVAILABLE", 503}
 	}

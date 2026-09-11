@@ -10,7 +10,7 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -116,7 +116,7 @@ func (w *Worker) buildInsights(ctx context.Context, wid string) error {
 			if len(values) == 8 {
 				last := values[7]
 				baseline := values[:7]
-				sort.Slice(baseline, func(i, j int) bool { return baseline[i].LessThan(baseline[j]) })
+				slices.SortFunc(baseline, decimal.Decimal.Cmp)
 				median := baseline[3]
 				minimum, _ := decimal.NewFromString(r.Amount)
 				if last.GreaterThan(median.Mul(decimal.RequireFromString("1.5"))) && last.Sub(median).GreaterThan(minimum) {

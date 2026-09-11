@@ -36,8 +36,8 @@ func TestBindAcceptsExactlyOneJSONValue(t *testing.T) {
 				}
 				return
 			}
-			var apiErr APIError
-			if !errors.As(err, &apiErr) || apiErr.Code != "INVALID_REQUEST" || apiErr.Status != 400 {
+			apiErr, ok := errors.AsType[APIError](err)
+			if !ok || apiErr.Code != "INVALID_REQUEST" || apiErr.Status != 400 {
 				t.Fatalf("invalid request not rejected consistently: %v", err)
 			}
 		})

@@ -169,7 +169,7 @@ func TestMVPIntegration(t *testing.T) {
 		}
 		return v["id"].(string)
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		iid := upload(makeCSV("0.123456789123"))
 		request("POST", base+"/imports/"+iid+"/commit", map[string]any{"confirm_corrections": true}, 200)
 	}

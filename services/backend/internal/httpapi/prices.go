@@ -59,9 +59,6 @@ func (s *Server) createPrice(c *gin.Context, tx pgx.Tx) (any, error) {
 	if _, e = tx.Exec(c.Request.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "price-snapshot:"+c.Param("wid")+":"+in.Provider); e != nil {
 		return nil, e
 	}
-	if _, e = tx.Exec(c.Request.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, c.Param("wid")+in.Provider+in.Model+in.Tier+in.Region+in.Route); e != nil {
-		return nil, e
-	}
 	var overlap bool
 	e = tx.QueryRow(c.Request.Context(), `SELECT EXISTS(SELECT 1 FROM price_versions WHERE workspace_id=$1 AND billing_provider=$2 AND model_version=$3 AND currency=$4 AND service_tier=$5 AND region=$6 AND route=$7 AND effective_from<$9 AND effective_to>$8)`, c.Param("wid"), in.Provider, in.Model, in.Currency, in.Tier, in.Region, in.Route, from, to).Scan(&overlap)
 	if e != nil {
@@ -124,21 +121,12 @@ func (s *Server) reconcileUsage(c *gin.Context, tx pgx.Tx) (any, error) {
 		return nil, e
 	}
 	type bucket struct {
-		ID, Model, Batch    string
+		ID, Model           string
 		Start, End          time.Time
 		Metrics, Dimensions []byte
+		Batch               string
 	}
-	buckets := []bucket{}
-	for rows.Next() {
-		var b bucket
-		if e = rows.Scan(&b.ID, &b.Model, &b.Start, &b.End, &b.Metrics, &b.Dimensions, &b.Batch); e != nil {
-			rows.Close()
-			return nil, e
-		}
-		buckets = append(buckets, b)
-	}
-	e = rows.Err()
-	rows.Close()
+	buckets, e := pgx.CollectRows(rows, pgx.RowToStructByPos[bucket])
 	if e != nil {
 		return nil, e
 	}

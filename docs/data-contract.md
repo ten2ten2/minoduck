@@ -13,7 +13,7 @@
 
 Provider JSON 中合法的数字可以使用科学计数法；连接器先用精确十进制解析并规范化为普通十进制字符串，再进入账本的 `numeric(30,12)` 边界。用户 CSV 仍禁止科学计数法，以保证人工报表格式明确、可直接核验。
 
-账户标识由用户声明，不能当作 Provider 已验证的组织身份。相同 Billing Account 内重复 provider/account_ref 被阻止；不同声明无法自动证明是不同真实账户。原生连接断开后保留历史 connection 与账本，可以在同一 connection 上重新提交凭据并递增 generation 后恢复同步。
+Anthropic 组织与 OpenRouter Workspace 通过 Provider API 验证身份；OpenAI 的账户标识仍为用户声明，明确标记未验证。相同 Billing Account 内拒绝重复 provider/account_ref；未经 Provider 验证的不同声明不能证明是不同真实账户。断开连接保留账本，重新提交凭据后递增 generation 并重新验证身份。
 
 ### L1：用量 × 历史价格
 
@@ -21,13 +21,15 @@ L1 只计算当前实现明确支持的文本用量与历史价格，不把 Prov
 
 Anthropic 的 `inference_geo` 会参与价格匹配；缺失该维度时 L1 保持待补来源。`speed=fast` 目前也保持待补来源，因为当前价格版本 schema 尚未把 speed 作为独立价格维度，不能拿 standard 价格静默计算 fast mode。
 
+OpenAI 只有可由明细完整证明的文本 token 分解可参与 L1；batch、音频、图片、cache-write 或维度缺失均保持待确认，不按普通文本价格计算。
+
 ## CSV
 
 UTF-8，可带 BOM；20 MiB / 100,000 行上限。禁止未知字段，避免误收 prompt、response、API key 等内容。必填列 `period_start,period_end,amount,currency,charge_category,coverage`；可选 `model,model_vendor,project,source_event_id`。
 
 上传同时指定 `account_id`、`source_scope`、`timezone`（IANA）、`cost_kind`、`granularity`。时间窗口为开始包含、结束不包含；只有日期时按声明时区解释；显式偏移保留真实时刻。`aggregate` 对同一完整维度只接受一行；`event` 必须带稳定 `source_event_id`。事件修订以同一 `source_event_id` 识别原记录，即使金额、日期、模型、类别或其他可修订字段发生变化也不会被当成第二笔费用。金额最多 18 位整数和 12 位小数，不接受科学计数法、千位逗号、NaN。
 
-充值不是消费，未知费用类别会隔离报错，未知模型名保留。预览返回最多 20 行、逐行错误、每币种汇总。存在错误不能提交。提交前再次校验存档 hash 并解析；更改当前记录必须显式确认。不同 source_scope 的同账户同口径时间重叠不能静默相加。CSV 证据引用保存为 `csv:row:<行号>`，原生连接器证据引用保存规范化 JSON entry 指针。
+充值不是消费，未知费用类别会隔离报错，未知模型名保留。预览返回最多 20 行、逐行错误、每币种汇总；存在错误不能提交。提交前再次校验存档 hash 并解析；更改当前记录必须显式确认。同账户、同口径、不同 source_scope 的窗口不能重叠。CSV 解析保留原始行号，提交时按结束日期的周窗口保存规范化证据；账本引用对应 JSON 的 `/entries/<下标>`。
 
 `coverage=complete` 是用户对每个来源窗口的声明；`coverage=partial` 明确表示不完整。还须所有窗口覆盖对账期间。勾选“范围已核实”不补足缺少的日期。
 
@@ -39,4 +41,4 @@ API 前缀 `/api/v1`，控制台经同源 BFF 使用。除认证入口、provide
 
 Costs 查询接受 `start,end,cost_kind,currency,provider,model,page,page_size`，结束日期不包含；分页默认 50、上限 100。Exports 使用同样筛选，UTF-8 BOM 和用户语言列名，金额保留精度，文本以安全前缀防止电子表格公式执行。
 
-[OpenAPI](openapi.json) 固定主要请求模型、路由和安全语义；动态报表 evidence 以 schema object 返回，具体键见后端响应构建处。本版不提供第三方公共 API key。
+[OpenAPI](openapi.json) 定义请求模型、路由和安全语义；动态 evidence 的具体键见后端响应类型。本应用不提供第三方公共 API key。

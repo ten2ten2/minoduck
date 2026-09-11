@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/subscriptions"
 )
@@ -84,51 +85,33 @@ func (w *Worker) claimMaintenance(ctx context.Context, wid string) ([]cleanupObj
  WHERE workspace_id=$1 AND object_key IS NOT NULL AND (state='deleting' OR expires_at<now())
  FOR UPDATE SKIP LOCKED
 ) UPDATE exports e SET state='deleting' FROM picked p
-WHERE e.workspace_id=$1 AND e.id=p.id RETURNING e.id,e.object_key`, wid)
+WHERE e.workspace_id=$1 AND e.id=p.id RETURNING e.id,e.object_key,'export'`, wid)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		object := cleanupObject{Kind: "export"}
-		if err = rows.Scan(&object.ID, &object.Key); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		objects = append(objects, object)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
+	objects, err = pgx.AppendRows(objects, rows, pgx.RowToStructByPos[cleanupObject])
+	if err != nil {
 		return nil, err
 	}
-	rows.Close()
 
 	rows, err = tx.Query(ctx, `WITH picked AS (
  SELECT id FROM source_batches b
  WHERE workspace_id=$1 AND (
   state='deleting'
   OR (state<>'committed' AND created_at<now()-interval '7 days')
-  OR ($3=false AND state='committed' AND coalesce(period_end,created_at)<$2)
+  OR ($3=false AND state='committed' AND period_end<$2)
  ) AND NOT EXISTS(SELECT 1 FROM cost_entries c WHERE c.workspace_id=$1 AND c.source_batch_id=b.id)
    AND NOT EXISTS(SELECT 1 FROM usage_buckets u WHERE u.workspace_id=$1 AND u.source_batch_id=b.id)
  FOR UPDATE SKIP LOCKED
 ) UPDATE source_batches b SET state='deleting' FROM picked p
-WHERE b.workspace_id=$1 AND b.id=p.id RETURNING b.id,b.object_key`, wid, cutoff, hold)
+WHERE b.workspace_id=$1 AND b.id=p.id RETURNING b.id,b.object_key,'source'`, wid, cutoff, hold)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		object := cleanupObject{Kind: "source"}
-		if err = rows.Scan(&object.ID, &object.Key); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		objects = append(objects, object)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
+	objects, err = pgx.AppendRows(objects, rows, pgx.RowToStructByPos[cleanupObject])
+	if err != nil {
 		return nil, err
 	}
-	rows.Close()
 
 	// Successful writes no longer need their intent. Unlinked intents become
 	// recoverable orphan-cleanup work after in-flight requests have had an hour.
@@ -140,23 +123,14 @@ WHERE b.workspace_id=$1 AND b.id=p.id RETURNING b.id,b.object_key`, wid, cutoff,
 	}
 	rows, err = tx.Query(ctx, `UPDATE object_intents SET state='deleting'
 WHERE workspace_id=$1 AND (state='deleting' OR created_at<now()-interval '1 hour')
-RETURNING object_key`, wid)
+RETURNING '',object_key,'intent'`, wid)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		object := cleanupObject{Kind: "intent"}
-		if err = rows.Scan(&object.Key); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		objects = append(objects, object)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
+	objects, err = pgx.AppendRows(objects, rows, pgx.RowToStructByPos[cleanupObject])
+	if err != nil {
 		return nil, err
 	}
-	rows.Close()
 	for _, statement := range []string{
 		`DELETE FROM notification_deliveries WHERE workspace_id=$1 AND created_at<now()-interval '90 days'`,
 		`DELETE FROM audit_events WHERE workspace_id=$1 AND created_at<now()-interval '2 years'`,
