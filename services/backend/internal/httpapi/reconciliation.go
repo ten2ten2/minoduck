@@ -50,7 +50,10 @@ func (s *Server) createInvoice(c *gin.Context, tx pgx.Tx) (any, error) {
 	if _, e := uuid.Parse(in.AccountID); e != nil {
 		return nil, bad("INVALID_CONNECTION")
 	}
-	if !ledger.ValidCurrency(in.Currency) || strings.TrimSpace(in.Reference) == "" || len(in.Reference) > 200 || len(in.Scope) == 0 || len(in.Scope) > 120 || strings.TrimSpace(in.Evidence) == "" || len(in.Evidence) > 4000 {
+	in.Reference = strings.TrimSpace(in.Reference)
+	in.Scope = strings.TrimSpace(in.Scope)
+	in.Evidence = strings.TrimSpace(in.Evidence)
+	if !ledger.ValidCurrency(in.Currency) || in.Reference == "" || len(in.Reference) > 200 || in.Scope == "" || len(in.Scope) > 120 || in.Evidence == "" || len(in.Evidence) > 4000 {
 		return nil, bad("INVALID_INVOICE")
 	}
 	start, e1 := time.Parse("2006-01-02", in.Start)
@@ -197,7 +200,8 @@ func (s *Server) handleReconciliation(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e := bind(c, &in); e != nil {
 		return nil, e
 	}
-	if (in.Status != "explained" && in.Status != "ignored" && in.Status != "open") || strings.TrimSpace(in.Note) == "" || len(in.Note) > 4000 {
+	in.Note = strings.TrimSpace(in.Note)
+	if (in.Status != "explained" && in.Status != "ignored" && in.Status != "open") || in.Note == "" || len(in.Note) > 4000 {
 		return nil, bad("EXPLANATION_REQUIRED")
 	}
 	result, e := tx.Exec(c.Request.Context(), `UPDATE reconciliation_runs SET handling_status=$1,handling_note=$2 WHERE workspace_id=$3 AND id=$4`, in.Status, in.Note, c.Param("wid"), c.Param("rid"))
