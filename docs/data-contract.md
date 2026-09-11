@@ -15,13 +15,13 @@
 
 ## CSV
 
-UTF-8，可带 BOM；20 MiB / 100,000 行上限。禁止未知字段，避免误收 prompt、response、API key 等内容。必填列 `period_start,period_end,amount,currency`；可选 `model,model_vendor,charge_category,project,source_event_id,coverage`。
+UTF-8，可带 BOM；20 MiB / 100,000 行上限。禁止未知字段，避免误收 prompt、response、API key 等内容。必填列 `period_start,period_end,amount,currency,charge_category,coverage`；可选 `model,model_vendor,project,source_event_id`。
 
-上传同时指定 `account_id`、`source_scope`、`timezone`（IANA）、`cost_kind`、`granularity`。时间窗口为开始包含、结束不包含；只有日期时按声明时区解释；显式偏移保留真实时刻。`aggregate` 对同一完整维度只接受一行；`event` 必须带稳定 `source_event_id`。金额最多 18 位整数和 12 位小数，不接受科学计数法、千位逗号、NaN。
+上传同时指定 `account_id`、`source_scope`、`timezone`（IANA）、`cost_kind`、`granularity`。时间窗口为开始包含、结束不包含；只有日期时按声明时区解释；显式偏移保留真实时刻。`aggregate` 对同一完整维度只接受一行；`event` 必须带稳定 `source_event_id`。事件修订以同一 `source_event_id` 识别原记录，即使金额、日期、模型、类别或其他可修订字段发生变化也不会被当成第二笔费用。金额最多 18 位整数和 12 位小数，不接受科学计数法、千位逗号、NaN。
 
-充值不是消费，未知费用类别会隔离报错，未知模型名保留。预览返回最多 20 行、逐行错误、每币种汇总。存在错误不能提交。提交前再次校验存档 hash 并解析；更改当前金额必须显式确认。不同 source_scope 的同账户同口径时间重叠不能静默相加。
+充值不是消费，未知费用类别会隔离报错，未知模型名保留。预览返回最多 20 行、逐行错误、每币种汇总。存在错误不能提交。提交前再次校验存档 hash 并解析；更改当前记录必须显式确认。不同 source_scope 的同账户同口径时间重叠不能静默相加。CSV 证据引用保存对应记录序号，原生连接器证据引用保存规范化 JSON entry 指针。
 
-`coverage=complete` 是用户对每个来源窗口的声明；还须所有窗口覆盖对账期间。勾选“范围已核实”不补足缺少的日期。
+`coverage=complete` 是用户对每个来源窗口的声明；`coverage=partial` 明确表示不完整。还须所有窗口覆盖对账期间。勾选“范围已核实”不补足缺少的日期。
 
 ## API 约定
 
