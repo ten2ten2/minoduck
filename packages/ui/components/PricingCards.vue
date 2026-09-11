@@ -87,7 +87,7 @@ const plans = [
         </ul>
         <button
           :class="plan.code === 'starter' ? 'primary' : ''"
-          :disabled="busy || (plan.code === current && plan.code === 'free')"
+          :disabled="busy || plan.code === current || (plan.code === 'free' && current !== undefined)"
           @click="emit('choose', plan.code, interval)"
         >
           {{
