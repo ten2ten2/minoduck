@@ -71,7 +71,10 @@ func (w *Worker) maintenance(ctx context.Context, wid string) error {
 			return e
 		}
 	}
-	rows, e = tx.Query(ctx, `SELECT id,object_key FROM source_batches b WHERE workspace_id=$1 AND (state<>'committed' AND created_at<now()-interval '7 days' OR ($3=false AND created_at<$2)) AND NOT EXISTS(SELECT 1 FROM cost_entries c WHERE c.workspace_id=$1 AND c.source_batch_id=b.id) AND NOT EXISTS(SELECT 1 FROM usage_buckets u WHERE u.workspace_id=$1 AND u.source_batch_id=b.id)`, wid, cutoff, hold)
+	rows, e = tx.Query(ctx, `SELECT id,object_key FROM source_batches b WHERE workspace_id=$1 AND (
+ (state<>'committed' AND created_at<now()-interval '7 days')
+ OR ($3=false AND state='committed' AND coalesce(nullif(preview->>'period_end','')::timestamptz,created_at)<$2)
+ ) AND NOT EXISTS(SELECT 1 FROM cost_entries c WHERE c.workspace_id=$1 AND c.source_batch_id=b.id) AND NOT EXISTS(SELECT 1 FROM usage_buckets u WHERE u.workspace_id=$1 AND u.source_batch_id=b.id)`, wid, cutoff, hold)
 	if e != nil {
 		return e
 	}
