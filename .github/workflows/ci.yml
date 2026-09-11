@@ -44,11 +44,8 @@ jobs:
       - run: git diff --exit-code -- internal/dbgen
       - name: Check gofmt
         run: |
-          diff="$(gofmt -d .)"
-          if [ -n "$diff" ]; then
-            printf 'gofmt changes required:\n%s\n' "$diff"
-            exit 1
-          fi
+          gofmt -w .
+          git diff --exit-code -- .
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: go build ./cmd/...
