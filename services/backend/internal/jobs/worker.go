@@ -86,7 +86,12 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 	var generation, currentGeneration int
 	var encrypted []byte
 	var start, end time.Time
-	e := w.DB.QueryRow(ctx, `SELECT r.account_id,r.generation,r.period_start,r.period_end,p.provider,p.status,p.credential_cipher,p.credential_key_id,p.generation FROM sync_runs r JOIN provider_accounts p ON p.id=r.account_id AND p.workspace_id=r.workspace_id WHERE r.id=$1 AND r.workspace_id=$2`, a.ResourceID, a.WorkspaceID).Scan(&aid, &generation, &start, &end, &provider, &status, &encrypted, &keyID, &currentGeneration)
+	readTx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
+	if e != nil {
+		return e
+	}
+	e = readTx.QueryRow(ctx, `SELECT r.account_id,r.generation,r.period_start,r.period_end,p.provider,p.status,p.credential_cipher,p.credential_key_id,p.generation FROM sync_runs r JOIN provider_accounts p ON p.id=r.account_id AND p.workspace_id=r.workspace_id WHERE r.id=$1 AND r.workspace_id=$2`, a.ResourceID, a.WorkspaceID).Scan(&aid, &generation, &start, &end, &provider, &status, &encrypted, &keyID, &currentGeneration)
+	_ = readTx.Rollback(ctx)
 	if e != nil {
 		return e
 	}
@@ -124,19 +129,34 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 		defer cancel()
 		_, _ = lease.Exec(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, aid)
 	}()
-	started, e := w.DB.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID)
+	stateTx, e := platform.TenantTx(ctx, w.DB, a.WorkspaceID)
 	if e != nil {
 		return e
 	}
+	started, e := stateTx.Exec(ctx, `UPDATE sync_runs SET state='running',attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE workspace_id=$1 AND id=$2 AND state<>'canceled'`, a.WorkspaceID, a.ResourceID)
+	if e != nil {
+		_ = stateTx.Rollback(ctx)
+		return e
+	}
 	if started.RowsAffected() == 0 {
+		_ = stateTx.Rollback(ctx)
 		return river.JobCancel(fmt.Errorf("SYNC_CANCELED"))
+	}
+	if e = stateTx.Commit(ctx); e != nil {
+		return e
 	}
 	defer func() {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			// Match River's refunded attempt without reviving disconnected runs.
-			_, _ = w.DB.Exec(cleanup, `UPDATE sync_runs SET state='pending',attempts=greatest(attempts-1,0) WHERE workspace_id=$1 AND id=$2 AND state='running'`, a.WorkspaceID, a.ResourceID)
+			tx, txErr := platform.TenantTx(cleanup, w.DB, a.WorkspaceID)
+			if txErr == nil {
+				defer tx.Rollback(cleanup)
+				if _, txErr = tx.Exec(cleanup, `UPDATE sync_runs SET state='pending',attempts=greatest(attempts-1,0) WHERE workspace_id=$1 AND id=$2 AND state='running'`, a.WorkspaceID, a.ResourceID); txErr == nil {
+					_ = tx.Commit(cleanup)
+				}
+			}
 		}
 	}()
 	for from := start; from.Before(end); from = from.AddDate(0, 0, 7) {
@@ -265,8 +285,13 @@ func (w *Worker) syncFailure(ctx context.Context, job *river.Job[tasks.Args], ai
 	if !errors.As(err, &f) {
 		f = connectors.Failure{Code: "PROVIDER_UNAVAILABLE"}
 	}
+	tx, e := platform.TenantTx(ctx, w.DB, job.Args.WorkspaceID)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback(ctx)
 	var attempts int
-	if e := w.DB.QueryRow(ctx, `SELECT attempts FROM sync_runs WHERE workspace_id=$1 AND id=$2`, job.Args.WorkspaceID, job.Args.ResourceID).Scan(&attempts); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT attempts FROM sync_runs WHERE workspace_id=$1 AND id=$2`, job.Args.WorkspaceID, job.Args.ResourceID).Scan(&attempts); e != nil {
 		return e
 	}
 	terminal := f.Permanent || job.Attempt >= job.MaxAttempts || attempts >= job.MaxAttempts
@@ -274,11 +299,6 @@ func (w *Worker) syncFailure(ctx context.Context, job *river.Job[tasks.Args], ai
 	if terminal {
 		state = "failed"
 	}
-	tx, e := w.DB.Begin(ctx)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback(ctx)
 	if _, e = tx.Exec(ctx, `UPDATE sync_runs SET state=$1,error_code=$2,finished_at=CASE WHEN $1='failed' THEN now() ELSE NULL END WHERE workspace_id=$3 AND id=$4 AND state<>'canceled'`, state, f.Code, job.Args.WorkspaceID, job.Args.ResourceID); e != nil {
 		return e
 	}
