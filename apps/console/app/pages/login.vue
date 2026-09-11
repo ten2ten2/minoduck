@@ -36,14 +36,15 @@ async function verify() {
   error.value = ''
   try {
     await api('/auth/email/verify', { method: 'POST', body: { token: token.value } })
-    token.value = ''
     await loadUser()
-    await navigateTo('/onboarding')
   } catch (e) {
     error.value = errorText(e)
+    return
   } finally {
     busy.value = false
   }
+  token.value = ''
+  await navigateTo('/onboarding')
 }
 </script>
 <template>

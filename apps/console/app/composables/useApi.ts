@@ -13,14 +13,19 @@ export interface Workspace {
   role: 'owner' | 'admin' | 'viewer'
 }
 
-export function useApi() {
+type RouteLike = {
+  params: Record<string, string | string[]>
+}
+
+export function useApi(route: RouteLike = useRoute()) {
   const user = useState<User | null>('md-user', () => null)
   const workspaces = useState<Workspace[]>('md-workspaces', () => [])
-  const route = useRoute()
   const { t, te } = useI18n()
-  const workspace = computed(() =>
-    workspaces.value.find((w) => w.slug === route.params.workspaceSlug),
-  )
+  const workspaceSlug = computed(() => {
+    const value = route.params.workspaceSlug
+    return Array.isArray(value) ? value[0] : value
+  })
+  const workspace = computed(() => workspaces.value.find((w) => w.slug === workspaceSlug.value))
   async function api<T = any>(
     path: string,
     options: {
@@ -45,8 +50,10 @@ export function useApi() {
     return code && te(`errors.${code}`) ? t(`errors.${code}`) : t('common.error')
   }
   const loadUser = async () => {
-    user.value = await api<User>('/me')
-    workspaces.value = await api<Workspace[]>('/workspaces')
+    const nextUser = await api<User>('/me')
+    const nextWorkspaces = await api<Workspace[]>('/workspaces')
+    user.value = nextUser
+    workspaces.value = nextWorkspaces
   }
   return { api, scoped, user, workspaces, workspace, errorText, loadUser }
 }
