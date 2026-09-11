@@ -5,11 +5,12 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 )
 
 func (w *Worker) failSyncRun(ctx context.Context, wid, rid, code string, disableRetry bool) error {
-	tx, e := w.DB.Begin(ctx)
+	tx, e := platform.TenantTx(ctx, w.DB, wid)
 	if e != nil {
 		return e
 	}
