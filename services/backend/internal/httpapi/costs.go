@@ -135,7 +135,7 @@ func (s *Server) overview(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	billed, e := platform.JSONRows(ctx, tx, `SELECT json_build_object('currency',currency,'amount',sum(amount)::text,'invoice_count',count(*)) FROM invoices WHERE workspace_id=$1 AND period_start>=$2 AND period_start<$3 GROUP BY currency`, c.Param("wid"), f.Start, f.End)
+	billed, e := platform.JSONRows(ctx, tx, `SELECT json_build_object('currency',currency,'amount',sum(amount)::text,'invoice_count',count(*)) FROM invoices WHERE workspace_id=$1 AND period_start>=$2 AND period_end<=$3 GROUP BY currency`, c.Param("wid"), f.Start, f.End)
 	if e != nil {
 		return nil, e
 	}
