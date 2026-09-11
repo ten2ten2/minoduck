@@ -69,6 +69,13 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 	if provider != baseline.Provider {
 		return nil, bad("PRICE_CANDIDATE_NOT_COMPARABLE")
 	}
+	usageComplete, e := ledger.CompleteUsage(ctx, tx, wid, in.Account, start, end)
+	if e != nil {
+		return nil, e
+	}
+	if !usageComplete {
+		return nil, bad("INCOMPLETE_USAGE")
+	}
 	if provider == "anthropic" && baseline.Region == "" {
 		return nil, bad("INCOMPLETE_USAGE")
 	}
@@ -126,7 +133,7 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 	if !difference.IsPositive() {
 		return gin.H{"status": "no_savings", "baseline": baseTotal.String(), "candidate": candidateTotal.String(), "currency": baseline.Currency}, nil
 	}
-	evidence, _ := json.Marshal(gin.H{"baseline": baseTotal.String(), "candidate": candidateTotal.String(), "baseline_price_id": in.Baseline, "candidate_price_id": in.Candidate, "model_version": baseline.Model, "period_start": start, "period_end": end, "usage_refs": refs, "evidence_refs": []string{baseline.Reference, candidate.Reference}, "confidence": "requires_validation", "assumptions": []string{baseline.Assumptions, candidate.Assumptions, "price simulation only; validate model identity, modality, context limits, latency, quality, data policy and all extra fees before changing providers", "Anthropic fast-mode usage is excluded until price versions model speed explicitly"}})
+	evidence, _ := json.Marshal(gin.H{"baseline": baseTotal.String(), "candidate": candidateTotal.String(), "baseline_price_id": in.Baseline, "candidate_price_id": in.Candidate, "model_version": baseline.Model, "period_start": start, "period_end": end, "usage_refs": refs, "usage_coverage_complete": true, "evidence_refs": []string{baseline.Reference, candidate.Reference}, "confidence": "requires_validation", "assumptions": []string{baseline.Assumptions, candidate.Assumptions, "successful native sync windows cover the full comparison period", "price simulation only; validate model identity, modality, context limits, latency, quality, data policy and all extra fees before changing providers", "Anthropic fast-mode usage is excluded until price versions model speed explicitly"}})
 	id := uuid.NewString()
 	key := "price:" + in.Account + ":" + in.Baseline + ":" + in.Candidate + ":" + in.Start + ":" + in.End
 	e = tx.QueryRow(ctx, `INSERT INTO insights(id,workspace_id,rule_key,kind,currency,evidence,estimated_savings) VALUES($1,$2,$3,'price_candidate',$4,$5,$6) ON CONFLICT(workspace_id,rule_key) DO UPDATE SET evidence=excluded.evidence,estimated_savings=excluded.estimated_savings,generated_at=now() RETURNING id`, id, wid, key, baseline.Currency, evidence, difference.String()).Scan(&id)
