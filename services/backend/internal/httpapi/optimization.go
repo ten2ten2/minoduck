@@ -69,7 +69,10 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 	if provider != baseline.Provider {
 		return nil, bad("PRICE_CANDIDATE_NOT_COMPARABLE")
 	}
-	rows, e := tx.Query(ctx, `SELECT id,metrics FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND model=$3 AND period_start>=$4 AND period_end<=$5 AND coalesce(dimensions->>'service_tier','')=$6 AND coalesce(dimensions->>'region','')=$7 AND coalesce(dimensions->>'endpoint_id','')=$8`, wid, in.Account, baseline.Model, start, end, baseline.Tier, baseline.Region, baseline.Route)
+	if provider == "anthropic" && baseline.Region == "" {
+		return nil, bad("INCOMPLETE_USAGE")
+	}
+	rows, e := tx.Query(ctx, `SELECT id,metrics,dimensions FROM usage_buckets WHERE workspace_id=$1 AND account_id=$2 AND model=$3 AND period_start>=$4 AND period_end<=$5 AND coalesce(dimensions->>'service_tier','')=$6 AND coalesce(dimensions->>'region','')=$7 AND coalesce(dimensions->>'endpoint_id','')=$8`, wid, in.Account, baseline.Model, start, end, baseline.Tier, baseline.Region, baseline.Route)
 	if e != nil {
 		return nil, e
 	}
@@ -77,15 +80,23 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 	baseTotal, candidateTotal := decimal.Zero, decimal.Zero
 	for rows.Next() {
 		var id string
-		var raw []byte
-		if e = rows.Scan(&id, &raw); e != nil {
+		var raw, dimensionsRaw []byte
+		if e = rows.Scan(&id, &raw, &dimensionsRaw); e != nil {
 			rows.Close()
 			return nil, e
 		}
-		var m map[string]string
+		var m, dimensions map[string]string
 		if e = json.Unmarshal(raw, &m); e != nil {
 			rows.Close()
 			return nil, e
+		}
+		if e = json.Unmarshal(dimensionsRaw, &dimensions); e != nil {
+			rows.Close()
+			return nil, e
+		}
+		if provider == "anthropic" && (dimensions["region"] == "" || dimensions["speed"] != "standard") {
+			rows.Close()
+			return nil, bad("INCOMPLETE_USAGE")
 		}
 		a, e := ledger.CalculateTextCost(m, baseline.Rate)
 		if e != nil {
@@ -115,7 +126,7 @@ func (s *Server) comparePrices(c *gin.Context, tx pgx.Tx) (any, error) {
 	if !difference.IsPositive() {
 		return gin.H{"status": "no_savings", "baseline": baseTotal.String(), "candidate": candidateTotal.String(), "currency": baseline.Currency}, nil
 	}
-	evidence, _ := json.Marshal(gin.H{"baseline": baseTotal.String(), "candidate": candidateTotal.String(), "baseline_price_id": in.Baseline, "candidate_price_id": in.Candidate, "model_version": baseline.Model, "period_start": start, "period_end": end, "usage_refs": refs, "evidence_refs": []string{baseline.Reference, candidate.Reference}, "confidence": "requires_validation", "assumptions": []string{baseline.Assumptions, candidate.Assumptions, "price simulation only; validate model identity, modality, context limits, latency, quality, data policy and all extra fees before changing providers"}})
+	evidence, _ := json.Marshal(gin.H{"baseline": baseTotal.String(), "candidate": candidateTotal.String(), "baseline_price_id": in.Baseline, "candidate_price_id": in.Candidate, "model_version": baseline.Model, "period_start": start, "period_end": end, "usage_refs": refs, "evidence_refs": []string{baseline.Reference, candidate.Reference}, "confidence": "requires_validation", "assumptions": []string{baseline.Assumptions, candidate.Assumptions, "price simulation only; validate model identity, modality, context limits, latency, quality, data policy and all extra fees before changing providers", "Anthropic fast-mode usage is excluded until price versions model speed explicitly"}})
 	id := uuid.NewString()
 	key := "price:" + in.Account + ":" + in.Baseline + ":" + in.Candidate + ":" + in.Start + ":" + in.End
 	e = tx.QueryRow(ctx, `INSERT INTO insights(id,workspace_id,rule_key,kind,currency,evidence,estimated_savings) VALUES($1,$2,$3,'price_candidate',$4,$5,$6) ON CONFLICT(workspace_id,rule_key) DO UPDATE SET evidence=excluded.evidence,estimated_savings=excluded.estimated_savings,generated_at=now() RETURNING id`, id, wid, key, baseline.Currency, evidence, difference.String()).Scan(&id)
