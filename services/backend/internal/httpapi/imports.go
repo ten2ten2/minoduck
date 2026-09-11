@@ -9,6 +9,7 @@ import (
 	"github.com/ten2ten2/minoduck/services/backend/internal/platform"
 	"github.com/ten2ten2/minoduck/services/backend/internal/tasks"
 	"io"
+	"strings"
 )
 
 func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
@@ -28,6 +29,9 @@ func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
 	if e != nil {
 		return nil, bad("INVALID_FILE")
 	}
+	if len(data) > ledger.MaxFileBytes {
+		return nil, bad("FILE_TOO_LARGE")
+	}
 	aid := c.PostForm("account_id")
 	if _, e = uuid.Parse(aid); e != nil {
 		return nil, bad("INVALID_CONNECTION")
@@ -40,7 +44,10 @@ func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
 	if status == "disconnected" {
 		return nil, bad("CONNECTION_DISCONNECTED")
 	}
-	scope, zone, kind, granularity := c.PostForm("source_scope"), c.PostForm("timezone"), c.PostForm("cost_kind"), c.PostForm("granularity")
+	scope := strings.TrimSpace(c.PostForm("source_scope"))
+	zone := strings.TrimSpace(c.PostForm("timezone"))
+	kind := strings.TrimSpace(c.PostForm("cost_kind"))
+	granularity := strings.TrimSpace(c.PostForm("granularity"))
 	if scope == "native-cost" {
 		return nil, bad("RESERVED_SOURCE_SCOPE")
 	}
@@ -60,6 +67,7 @@ func (s *Server) upload(c *gin.Context, tx pgx.Tx) (any, error) {
 	preview, _ := json.Marshal(p)
 	_, e = tx.Exec(c.Request.Context(), `INSERT INTO source_batches(id,workspace_id,account_id,object_key,content_hash,source_scope,cost_kind,source_timezone,granularity,state,preview) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, c.Param("wid"), aid, key, p.Hash, scope, kind, zone, granularity, state, preview)
 	if e != nil {
+		_ = s.Objects.Delete(c.Request.Context(), key)
 		return nil, e
 	}
 	c.Set("response_status", 201)
