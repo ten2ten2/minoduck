@@ -2,6 +2,7 @@
 const { t } = useI18n()
 const { destination } = useBillingIntent()
 const { api, workspaces, loadUser, errorText } = useApi()
+const { preferenceError, savePreferences } = useAccountPreferences()
 const name = ref(''),
   slug = ref(''),
   busy = ref(false),
@@ -27,11 +28,12 @@ async function create() {
   <div class="onboarding">
     <header class="row between">
       <BrandWordmark />
-      <PreferencesControl />
+      <PreferencesControl @change="savePreferences" />
     </header>
     <main class="stack">
       <h1>{{ t('onboarding.title') }}</h1>
       <p class="muted">{{ t('onboarding.subtitle') }}</p>
+      <div v-if="preferenceError" class="notice error" role="alert">{{ preferenceError }}</div>
       <div v-if="workspaces.length" class="panel stack">
         <h2>{{ t('onboarding.existing') }}</h2>
         <NuxtLink v-for="w in workspaces" :key="w.id" :to="destination(w.slug)" class="button">
