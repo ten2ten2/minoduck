@@ -23,6 +23,30 @@ func validMasterKey(value string) bool {
 	return err == nil && len(decoded) == 32
 }
 
+func (c Config) stripeConfigured() bool {
+	if c.StripeKey == "" || c.StripeWebhookSecret == "" || c.StripePortalConfig == "" {
+		return false
+	}
+	for _, price := range c.Prices {
+		if price == "" {
+			return false
+		}
+	}
+	return len(c.Prices) == 4
+}
+
+func (c Config) hasStripeConfig() bool {
+	if c.StripeKey != "" || c.StripeWebhookSecret != "" || c.StripePortalConfig != "" {
+		return true
+	}
+	for _, price := range c.Prices {
+		if price != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func Load() (Config, error) {
 	get := func(k, d string) string {
 		if v := os.Getenv(k); v != "" {
@@ -41,6 +65,12 @@ func Load() (Config, error) {
 	}
 	if c.MasterKey != "" && !validMasterKey(c.MasterKey) {
 		return c, errors.New("PROVIDER_ENCRYPTION_MASTER_KEY must be base64-encoded 32 bytes")
+	}
+	if (c.GoogleID == "") != (c.GoogleSecret == "") {
+		return c, errors.New("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together")
+	}
+	if c.hasStripeConfig() && !c.stripeConfigured() {
+		return c, errors.New("Stripe key, webhook secret, portal configuration and all four price IDs must be configured together")
 	}
 	if c.Env == "production" && (!strings.HasPrefix(c.AppURL, "https://") || len(c.BFFToken) < 32 || !validMasterKey(c.MasterKey) || c.R2Endpoint == "" || c.R2Bucket == "" || c.R2AccessKey == "" || c.R2SecretKey == "" || c.ResendKey == "" || c.MailFrom == "") {
 		return c, errors.New("production secrets, HTTPS, R2 and email configuration required")
