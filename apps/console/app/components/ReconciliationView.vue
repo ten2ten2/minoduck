@@ -66,27 +66,54 @@ async function save() {
           {{ data.evidence.source_scope }} · {{ date(data.evidence.period_start) }} —
           {{ date(data.evidence.period_end) }}
         </p>
-        <p>{{ t('invoices.adjustment') }}: {{ money(data.evidence.adjustment, data.currency) }}</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>{{ t('common.source') }}</th>
-                <th>{{ t('costs.revision') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="entry in data.evidence.entry_refs" :key="entry.entry_id">
-                <td>
-                  <NuxtLink class="link" :to="`/w/${workspace?.slug}/costs/${entry.entry_id}`">
-                    {{ entry.entry_id }}
-                  </NuxtLink>
-                </td>
-                <td>{{ entry.revision }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <template v-if="data.level === 'L1'">
+          <div v-if="data.evidence.price_evidence?.length" class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t('common.source') }}</th>
+                  <th>{{ t('prices.basis') }}</th>
+                  <th class="amount">{{ t('common.amount') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in data.evidence.price_evidence" :key="entry.usage_id">
+                  <td>
+                    <a class="link" :href="entry.reference" target="_blank" rel="noopener noreferrer">
+                      {{ entry.price_version_id }}
+                    </a>
+                  </td>
+                  <td>{{ t(`prices.${entry.price_basis}`) }}</td>
+                  <td class="amount">{{ money(entry.amount, data.currency) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="muted">{{ t('reconciliation.usageHelp') }}</p>
+        </template>
+        <template v-else>
+          <p>{{ t('invoices.adjustment') }}: {{ money(data.evidence.adjustment, data.currency) }}</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t('common.source') }}</th>
+                  <th>{{ t('costs.revision') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in data.evidence.entry_refs" :key="entry.entry_id">
+                  <td>
+                    <NuxtLink class="link" :to="`/w/${workspace?.slug}/costs/${entry.entry_id}`">
+                      {{ entry.entry_id }}
+                    </NuxtLink>
+                  </td>
+                  <td>{{ entry.revision }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
       </article>
       <form v-if="workspace?.role !== 'viewer'" class="panel stack" @submit.prevent="save">
         <h2>{{ t('reconciliation.handling') }}</h2>
