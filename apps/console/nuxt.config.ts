@@ -1,6 +1,8 @@
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath } from 'node:url'
 
+const uiComponentsDir = fileURLToPath(new URL('../../packages/ui/components', import.meta.url))
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-10',
   ssr: false,
@@ -8,7 +10,7 @@ export default defineNuxtConfig({
   modules: ['@nuxtjs/i18n'],
   css: [fileURLToPath(new URL('../../packages/ui/theme.css', import.meta.url))],
   components: [
-    { path: '../../packages/ui/components', pathPrefix: false },
+    { path: uiComponentsDir, pathPrefix: false },
     { path: '~/components', pathPrefix: false },
   ],
   vite: { plugins: [tailwindcss()] },

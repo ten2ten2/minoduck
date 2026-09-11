@@ -14,13 +14,15 @@ const paths = [
   '/privacy',
   '/terms',
 ]
+const uiComponentsDir = fileURLToPath(new URL('../../packages/ui/components', import.meta.url))
+
 export default defineNuxtConfig({
   compatibilityDate: '2026-09-10',
   devtools: { enabled: false },
   modules: ['@nuxtjs/i18n'],
   css: [fileURLToPath(new URL('../../packages/ui/theme.css', import.meta.url))],
   components: [
-    { path: '../../packages/ui/components', pathPrefix: false },
+    { path: uiComponentsDir, pathPrefix: false },
     { path: '~/components', pathPrefix: false },
   ],
   vite: { plugins: [tailwindcss()] },
@@ -36,7 +38,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       appUrl: 'http://localhost:3001',
-      siteUrl: 'https://www.minoduck.ai',
+      siteUrl: 'http://localhost:3000',
       contactEmail: '',
     },
   },
