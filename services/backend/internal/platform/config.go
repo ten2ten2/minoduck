@@ -84,6 +84,9 @@ func Load() (Config, error) {
 			c.Prices[p+":"+v.k] = os.Getenv("STRIPE_PRICE_" + strings.ToUpper(p) + "_" + v.env)
 		}
 	}
+	if c.Env != "development" && c.Env != "production" {
+		return c, errors.New("APP_ENV must be development or production")
+	}
 	if c.DatabaseURL == "" || c.BFFToken == "" {
 		return c, errors.New("DATABASE_URL and BFF_SERVICE_TOKEN are required")
 	}
