@@ -33,7 +33,7 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[tasks.Args]) (err erro
 			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if job.Args.Task == "sync" {
-				_, _ = w.DB.Exec(cleanup, `UPDATE sync_runs SET state='failed',finished_at=now(),error_code=coalesce(error_code,'SYNC_FAILED') WHERE workspace_id=$1 AND id=$2 AND state IN ('pending','running')`, job.Args.WorkspaceID, job.Args.ResourceID)
+				_ = w.failSyncRun(cleanup, job.Args.WorkspaceID, job.Args.ResourceID, "SYNC_FAILED", false)
 			}
 			if job.Args.Task == "export" {
 				tx, e := platform.TenantTx(cleanup, w.DB, job.Args.WorkspaceID)
@@ -44,6 +44,9 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[tasks.Args]) (err erro
 						_ = tx.Commit(cleanup)
 					}
 				}
+			}
+			if job.Args.Task == "notification" {
+				_, _ = w.DB.Exec(cleanup, `UPDATE notification_deliveries SET state='failed' WHERE workspace_id=$1 AND id=$2 AND state='pending'`, job.Args.WorkspaceID, job.Args.ResourceID)
 			}
 		}
 	}()
@@ -91,10 +94,16 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 		return river.JobCancel(fmt.Errorf("CONNECTION_DISCONNECTED"))
 	}
 	if keyID != w.Config.KeyID {
+		if e = w.failSyncRun(ctx, a.WorkspaceID, a.ResourceID, "ENCRYPTION_KEY_VERSION_UNAVAILABLE", true); e != nil {
+			return e
+		}
 		return river.JobCancel(fmt.Errorf("ENCRYPTION_KEY_VERSION_UNAVAILABLE"))
 	}
 	key, e := platform.Decrypt(w.Config.MasterKey, encrypted, a.WorkspaceID+":"+aid)
 	if e != nil {
+		if e = w.failSyncRun(ctx, a.WorkspaceID, a.ResourceID, "CREDENTIAL_DECRYPTION_FAILED", true); e != nil {
+			return e
+		}
 		return river.JobCancel(fmt.Errorf("CREDENTIAL_DECRYPTION_FAILED"))
 	}
 	// A session advisory lock covers network work; no transaction is held while fetching.
@@ -167,6 +176,7 @@ func (w *Worker) sync(ctx context.Context, job *river.Job[tasks.Args]) error {
 			return e
 		}
 		if e = tx.Commit(ctx); e != nil {
+			_ = w.Objects.Delete(ctx, object)
 			return e
 		}
 	}
