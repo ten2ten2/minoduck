@@ -40,6 +40,8 @@ jobs:
             cache-dependency-path: services/backend/go.sum,
           }
       - run: go mod verify
+      - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+      - run: git diff --exit-code -- internal/dbgen
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race -count=1 ./...
