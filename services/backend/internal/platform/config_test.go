@@ -67,6 +67,21 @@ func TestLoadRejectsUnsafeAppURL(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidR2Endpoint(t *testing.T) {
+	for _, endpoint := range []string{"http://example.r2.cloudflarestorage.com", "https://example.r2.cloudflarestorage.com/unexpected"} {
+		t.Run(endpoint, func(t *testing.T) {
+			baseConfigEnv(t)
+			t.Setenv("R2_ENDPOINT", endpoint)
+			t.Setenv("R2_BUCKET", "bucket")
+			t.Setenv("R2_ACCESS_KEY_ID", "access")
+			t.Setenv("R2_SECRET_ACCESS_KEY", "secret")
+			if _, err := Load(); err == nil {
+				t.Fatal("accepted invalid R2 endpoint")
+			}
+		})
+	}
+}
+
 func TestLoadAcceptsCompleteStripeConfiguration(t *testing.T) {
 	baseConfigEnv(t)
 	t.Setenv("STRIPE_SECRET_KEY", "sk_test_example")
