@@ -31,6 +31,7 @@ type Entry struct {
 	Project    string            `json:"project"`
 	Scope      string            `json:"source_scope"`
 	SourceID   string            `json:"source_event_id"`
+	SourceRef  string            `json:"-"`
 	Coverage   string            `json:"coverage"`
 	Dimensions map[string]string `json:"dimensions,omitempty"`
 }
@@ -52,9 +53,15 @@ type Preview struct {
 
 func Hash(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
 
-// NaturalKey excludes amount and revision: a corrected snapshot supersedes a cost.
+// NaturalKey excludes mutable values. Event reports use the source's stable ID;
+// aggregate reports use their full declared dimensions and time window.
 func NaturalKey(e Entry) string {
-	parts := []any{e.Scope, e.Kind, e.Start.UTC().Format(time.RFC3339Nano), e.End.UTC().Format(time.RFC3339Nano), e.Provider, e.Vendor, e.Model, e.Category, e.Currency, e.Project, e.SourceID, e.Dimensions}
+	var parts []any
+	if e.SourceID != "" {
+		parts = []any{e.Scope, e.Kind, e.Provider, e.SourceID}
+	} else {
+		parts = []any{e.Scope, e.Kind, e.Start.UTC().Format(time.RFC3339Nano), e.End.UTC().Format(time.RFC3339Nano), e.Provider, e.Vendor, e.Model, e.Category, e.Currency, e.Project, e.Dimensions}
+	}
 	b, _ := json.Marshal(parts)
 	return Hash(b)
 }
@@ -164,7 +171,7 @@ func ParseCSV(data []byte, provider, scope, timezone, kind, granularity string) 
 			reject("MISSING_EVENT_ID")
 			continue
 		}
-		entry := Entry{Start: start.UTC(), End: end.UTC(), Timezone: timezone, Provider: provider, Vendor: get("model_vendor"), Model: get("model"), Amount: a.String(), Currency: get("currency"), Category: category, Kind: kind, Project: get("project"), Scope: scope, Coverage: get("coverage")}
+		entry := Entry{Start: start.UTC(), End: end.UTC(), Timezone: timezone, Provider: provider, Vendor: get("model_vendor"), Model: get("model"), Amount: a.String(), Currency: get("currency"), Category: category, Kind: kind, Project: get("project"), Scope: scope, SourceRef: fmt.Sprintf("csv:row:%d", row), Coverage: get("coverage")}
 		if granularity == "event" {
 			entry.SourceID = get("source_event_id")
 		}
