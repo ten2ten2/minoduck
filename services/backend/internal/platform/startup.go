@@ -22,11 +22,11 @@ func Open(ctx context.Context, c Config) (*pgxpool.Pool, error) {
 		return nil, e
 	}
 	if c.Env == "production" {
-		var privileged bool
-		e = pool.QueryRow(ctx, `SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user`).Scan(&privileged)
-		if e != nil || privileged {
+		var privileged, canCreateSchema bool
+		e = pool.QueryRow(ctx, `SELECT r.rolsuper OR r.rolbypassrls, has_schema_privilege(current_user,'public','CREATE') FROM pg_roles r WHERE r.rolname=current_user`).Scan(&privileged, &canCreateSchema)
+		if e != nil || privileged || canCreateSchema {
 			pool.Close()
-			return nil, fmt.Errorf("RUNTIME_ROLE_MUST_ENFORCE_RLS")
+			return nil, fmt.Errorf("RUNTIME_ROLE_MUST_BE_UNPRIVILEGED")
 		}
 	}
 	return pool, nil
