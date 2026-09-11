@@ -19,10 +19,10 @@ export function useSession() {
   const workspaces = useState<Workspace[]>('md-workspaces', () => [])
 
   const load = async () => {
-    const nextUser = await $fetch<User>('/api/v1/me', { credentials: 'same-origin' })
-    const nextWorkspaces = await $fetch<Workspace[]>('/api/v1/workspaces', {
-      credentials: 'same-origin',
-    })
+    const [nextUser, nextWorkspaces] = await Promise.all([
+      $fetch<User>('/api/v1/me', { credentials: 'same-origin' }),
+      $fetch<Workspace[]>('/api/v1/workspaces', { credentials: 'same-origin' }),
+    ])
     user.value = nextUser
     workspaces.value = nextWorkspaces
   }
